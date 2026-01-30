@@ -68,6 +68,18 @@ pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                     }
                 }
                 "quit" => {
+                    // 先停止 Admin Server，避免僵尸 socket
+                    let state = app.state::<crate::commands::proxy::ProxyServiceState>();
+                    let admin_server = state.admin_server.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let mut lock = admin_server.write().await;
+                        if let Some(admin) = lock.take() {
+                            admin.axum_server.stop();
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        }
+                    });
+                    // 給一點時間讓 socket 關閉
+                    std::thread::sleep(std::time::Duration::from_millis(200));
                     app.exit(0);
                 }
                 "refresh_curr" => {
