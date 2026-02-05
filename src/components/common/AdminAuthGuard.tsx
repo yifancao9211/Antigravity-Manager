@@ -17,15 +17,28 @@ export const AdminAuthGuard: React.FC<{ children: React.ReactNode }> = ({ childr
     useEffect(() => {
         if (isTauri()) return;
 
-        // 检查本地存储
+        // 检查 Session 存储 (优先)
+        const sessionKey = sessionStorage.getItem('abv_admin_api_key');
+        if (sessionKey) {
+            setIsAuthenticated(true);
+            setApiKey(sessionKey);
+            return;
+        }
+
+        // 检查本地存储 (迁移逻辑)
         const savedKey = localStorage.getItem('abv_admin_api_key');
         if (savedKey) {
+            // 迁移到 sessionStorage 并清理 localStorage
+            sessionStorage.setItem('abv_admin_api_key', savedKey);
+            localStorage.removeItem('abv_admin_api_key');
             setIsAuthenticated(true);
+            setApiKey(savedKey);
         }
 
         // 监听全局 401 事件
         const handleUnauthorized = () => {
-            localStorage.removeItem('abv_admin_api_key');
+            sessionStorage.removeItem('abv_admin_api_key');
+            localStorage.removeItem('abv_admin_api_key'); // 双重清理确保万一
             setIsAuthenticated(false);
         };
 
@@ -36,7 +49,9 @@ export const AdminAuthGuard: React.FC<{ children: React.ReactNode }> = ({ childr
     const handleLogin = (e: React.FormEvent) => {
         e.preventDefault();
         if (apiKey.trim()) {
-            localStorage.setItem('abv_admin_api_key', apiKey.trim());
+            sessionStorage.setItem('abv_admin_api_key', apiKey.trim());
+            // 确保旧的被清理
+            localStorage.removeItem('abv_admin_api_key');
             setIsAuthenticated(true);
             window.location.reload();
         }

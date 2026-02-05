@@ -190,7 +190,7 @@ export async function request<T>(cmd: string, args?: any): Promise<T> {
     });
   }
 
-  const apiKey = typeof window !== 'undefined' ? localStorage.getItem('abv_admin_api_key') : null;
+  const apiKey = typeof window !== 'undefined' ? sessionStorage.getItem('abv_admin_api_key') : null;
 
   const options: RequestInit = {
     method: mapping.method,

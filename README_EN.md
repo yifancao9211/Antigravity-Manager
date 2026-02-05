@@ -250,6 +250,9 @@ print(response.choices[0].message.content)
 
 *   **Changelog**:
     *   **v4.1.5 (2026-02-05)**:
+        -   **[Security Fix] Frontend API Key Storage Migration (LocalStorage -> SessionStorage)**:
+            -   **Storage Upgrade**: Migrated the storage of the Admin API Key from persistent `localStorage` to session-based `sessionStorage`, significantly reducing security risks on shared devices.
+            -   **Seamless Auto-Migration**: Implemented automatic detection and migration logic. The system identifies legacy `localStorage` keys, automatically transfers them to `sessionStorage`, and securely wipes the old data, ensuring a seamless transition and eliminating security vulnerabilities for existing users.
         -   **[Core Fix] Fix Account Addition Failure in Docker Environment (Issue #1583)**:
             -   **Account Context Fix**: Fixed the proxy selection issue caused by `account_id` being `None` when adding new accounts. The system now generates a temporary UUID for new accounts to ensure all OAuth requests have a clear account context.
             -   **Enhanced Logging**: Optimized logging in `refresh_access_token` and `get_effective_client` to provide more detailed proxy selection information, helping diagnose network issues in Docker environments.
