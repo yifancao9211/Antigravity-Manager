@@ -1,6 +1,6 @@
 // 移除冗余的顶层导入，因为这些在代码中已由 full path 或局部导入处理
 use dashmap::DashMap;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -33,6 +33,7 @@ pub struct ProxyToken {
     pub reset_time: Option<i64>,           // [NEW] 配额刷新时间戳（用于排序优化）
     pub validation_blocked: bool,          // [NEW] Check for validation block (VALIDATION_REQUIRED temporary block)
     pub validation_blocked_until: i64,     // [NEW] Timestamp until which the account is blocked
+    pub model_quotas: HashMap<String, i32>, // [OPTIMIZATION] In-memory cache for model-specific quotas
 }
 
 pub struct TokenManager {
@@ -484,6 +485,19 @@ impl TokenManager {
         // [NEW] 提取最近的配额刷新时间（用于排序优化：刷新时间越近优先级越高）
         let reset_time = self.extract_earliest_reset_time(&account);
 
+        // [OPTIMIZATION] 构建模型配额内存缓存，避免排序时读取磁盘
+        let mut model_quotas = HashMap::new();
+        if let Some(models) = account.get("quota").and_then(|q| q.get("models")).and_then(|m| m.as_array()) {
+            for model in models {
+                if let (Some(name), Some(pct)) = (model.get("name").and_then(|v| v.as_str()), model.get("percentage").and_then(|v| v.as_i64())) {
+                    // Normalize name to standard ID
+                    let standard_id = crate::proxy::common::model_mapping::normalize_to_standard_id(name)
+                        .unwrap_or_else(|| name.to_string());
+                    model_quotas.insert(standard_id, pct as i32);
+                }
+            }
+        }
+
         Ok(Some(ProxyToken {
             account_id,
             access_token,
@@ -500,6 +514,7 @@ impl TokenManager {
             reset_time,
             validation_blocked: account.get("validation_blocked").and_then(|v| v.as_bool()).unwrap_or(false),
             validation_blocked_until: account.get("validation_blocked_until").and_then(|v| v.as_i64()).unwrap_or(0),
+            model_quotas,
         }))
     }
 
@@ -995,10 +1010,12 @@ impl TokenManager {
 
         tokens_snapshot.sort_by(|a, b| {
             // Priority 1: 目标模型的 quota (higher is better) -> 保护低配额账号
-            let quota_a = Self::get_model_quota_from_json(&a.account_path, &normalized_target)
+            // [OPTIMIZATION] 使用内存缓存，不再读取磁盘 IO
+            let quota_a = a.model_quotas.get(&normalized_target).copied()
                 .unwrap_or(a.remaining_quota.unwrap_or(0));
-            let quota_b = Self::get_model_quota_from_json(&b.account_path, &normalized_target)
+            let quota_b = b.model_quotas.get(&normalized_target).copied()
                 .unwrap_or(b.remaining_quota.unwrap_or(0));
+
             let quota_cmp = quota_b.cmp(&quota_a);
             if quota_cmp != std::cmp::Ordering::Equal {
                 return quota_cmp;
@@ -1042,7 +1059,7 @@ impl TokenManager {
             tokens_snapshot.iter().map(|t| format!(
                 "{}(quota={}%, reset={:?}, health={:.2})",
                 t.email,
-                Self::get_model_quota_from_json(&t.account_path, &normalized_target).unwrap_or(0),
+                t.model_quotas.get(&normalized_target).copied().unwrap_or(0),
                 t.reset_time.map(|ts| {
                     let now = chrono::Utc::now().timestamp();
                     let diff_secs = ts - now;
