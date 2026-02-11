@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.1.14)
+> Professional AI Account Management & Protocol Proxy System (v4.1.15)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.1.14-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.1.15-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -264,6 +264,11 @@ print(response.choices[0].message.content)
 ## 📝 Developer & Community
 
 *   **Changelog**:
+    *   **v4.1.15 (2026-02-11)**:
+        -   **[Core Feature] Enable Native Auto-Update for macOS and Windows (PR #1850)**:
+            -   **End-to-End Auto-Update**: Enabled the native Tauri updater plugin, supporting in-app update checks, downloads, and installations.
+            -   **Release Workflow Fix**: Completely fixed the logic for generating update metadata (`updater.json`) in the Release workflow. The system now automatically builds a complete update index from `.sig` signature files, supporting darwin-aarch64, darwin-x86_64, and windows-x86_64 architectures.
+            -   **Seamless Experience**: Integrated with the existing frontend update notification components to achieve a fully automated update loop from release to installation.
     *   **v4.1.14 (2026-02-11)**:
         -   **[Core Fix] Cloudflared Persistence Support (Issue #1805)**:
             -   **Persistence**: Resolved the issue where Cloudflared (CF Tunnel) settings, including Tunnel Token, Mode, and HTTP/2 preference, were lost after restarting the app.
