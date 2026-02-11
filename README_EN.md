@@ -138,7 +138,7 @@ curl -sSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/depl
 
 **Option 2: via Homebrew** (If you have [Linuxbrew](https://sh.brew.sh/) installed)
 ```bash
-brew tap lbjlaq/antigravity-manager https://github.com/lbjlaq/Antigravity-Manager/releases/download/v4.1.14/Antigravity_Tools_4.1.14_x64.dmg
+brew tap lbjlaq/antigravity-manager https://github.com/lbjlaq/Antigravity-Manager/releases/download/v4.1.15/Antigravity_Tools_4.1.15_x64.dmg
 ```
 
 #### Other Linux Distributions
@@ -276,7 +276,11 @@ print(response.choices[0].message.content)
             -   **Verify Project ID**: Log in to the [Google Cloud Console](https://console.cloud.google.com/) and search for the specific Project ID (e.g., `bold-spark-xxx`) mentioned in the error. If the project is missing, create a new one and enable the necessary Vertex AI APIs.
             -   **Reset Account Session**: Try removing and re-adding your account within the Antigravity app to clear any stale session data.
             -   **CLI-Based Verification**: We recommend re-authenticating via the Gemini CLI (`gcloud auth login`) and ensuring that your project is correctly configured using `gcloud config set project`.
-    *   **v4.1.14 (2026-02-11)**:
+        -   **[Troubleshooting] Resolving HTTP 403 "Forbidden" Errors (Issue #1834)**:
+            -   **Check Verification Link**: Look for a message in the API response like "To continue, verify your account at...". If present, follow the link to complete Google's verification process.
+            -   **Verify Plan Eligibility**: Check our [FAQ page](https://antigravity.google/docs/faq#why-am-i-ineligible-for-a-google-one-ai-plan) to ensure your account meets the requirements for Google One AI or Gemini Code Assist plans.
+            -   **Self-Recovery**: Some 403 errors (e.g., triggered by risk controls or quota adjustments) may resolve automatically after waiting for a period of time.
+    *   **v4.1.15 (2026-02-11)**:
         -   **[Core Fix] Cloudflared Persistence Support (Issue #1805)**:
             -   **Persistence**: Resolved the issue where Cloudflared (CF Tunnel) settings, including Tunnel Token, Mode, and HTTP/2 preference, were lost after restarting the app.
             -   **Hot-Sync Implementation**: Integrated real-time persistence for all Cloudflared settings. Mode switching, Token updates (on blur), and HTTP/2 toggles are now immediately saved to the configuration file.
@@ -296,7 +300,7 @@ print(response.choices[0].message.content)
             -   **Isolated Sync Logic**: Implemented isolated synchronization for Opencode provider to prevent state pollution and ensure data integrity.
             -   **Cleanup Workflow**: Added resource cleanup workflow for better resource management and system efficiency.
             -   **Enhanced Stability**: Improved the stability and reliability of the synchronization process.
-    *   **v4.1.14 (2026-02-11)**:
+    *   **v4.1.15 (2026-02-11)**:
         -   **[Core Feature] Homebrew Cask Installation Detection & Support (PR #1673)**:
             -   **App Upgrade**: Added detection logic for Homebrew Cask installations. If the app was installed via Cask, users can now trigger the `brew upgrade --cask` flow directly within the app for a seamless upgrade experience.
         -   **[Core Fix] Gemini Image Generation Quota Protection (PR #1764)**:

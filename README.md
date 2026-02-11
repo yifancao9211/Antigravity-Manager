@@ -425,7 +425,11 @@ response = client.chat.completions.create(
             -   **验证项目 ID**: 登录 [Google Cloud Console](https://console.cloud.google.com/)，在项目选择器中搜索报错提到的 ID（如 `bold-spark-xxx`）。若项目不存在，请创建新项目并启用所需的 Vertex AI API。
             -   **重置账户会话**: 尝试在 Antigravity 应用中“删除账户”并“重新添加”，以清除旧的会话残留。
             -   **CLI 辅助验证**: 建议使用 Gemini CLI (`gcloud auth login`) 重新进行身份验证，并确保 `gcloud config set project` 指向了正确的有效项目。
-    *   **v4.1.14 (2026-02-11)**:
+        -   **[故障排查] 针对 HTTP 403 "Forbidden" 错误的解决建议 (Issue #1834)**:
+            -   **检查验证链接**: 请检查 API 响应中是否包含提示 "To continue, verify your account at..." 的链接。若有，请点击该链接并按照 Google 提示完成验证。
+            -   **确认计划资格**: 访问 [FAQ 页面](https://antigravity.google/docs/faq#why-am-i-ineligible-for-a-google-one-ai-plan) 确认您的账号是否符合 Google One AI 计划或 Gemini Code Assist 的使用要求。
+            -   **自动恢复**: 部分 403 错误（如触发风险控制或配额调整）可能会在等待一段时间后自动恢复正常。
+    *   **v4.1.15 (2026-02-11)**:
         -   **[核心修复] Cloudflared 公网访问设置持久化 (Issue #1805)**:
             -   **设置记忆**: 修复了 Cloudflared (CF Tunnel) 的 Token、隧道模式及 HTTP/2 设置在应用重启后丢失的问题。
             -   **热更新同步**: 实现了设置的实时持久化。现在切换隧道模式、修改 Token (失焦同步) 或切换 HTTP/2 选项时，配置都会立即保存，确保重启后恢复如初。
@@ -450,7 +454,7 @@ response = client.chat.completions.create(
             -   **隔离同步逻辑**: 实现 Opencode 提供商的独立同步机制,防止状态污染,确保数据纯净。
             -   **清理工作流**: 新增资源清理工作流,优化资源管理,提升系统运行效率。
             -   **稳定性增强**: 增强了同步过程的稳定性和可靠性。
-    *   **v4.1.14 (2026-02-11)**:
+    *   **v4.1.15 (2026-02-11)**:
         -   **[核心功能] Homebrew Cask 安装检测与支持 (PR #1673)**:
             -   **应用升级**: 新增了对 Homebrew Cask 安装的检测逻辑。如果应用是通过 Cask 安装的，现在可以直接在应用内触发 `brew upgrade --cask` 流程，实现无缝升级体验。
         -   **[核心修复] Gemini 图像生成配额保护 (PR #1764)**:
