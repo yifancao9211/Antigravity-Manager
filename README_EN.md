@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.1.22)
+> Professional AI Account Management & Protocol Proxy System (v4.1.23)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.1.22-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.1.23-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -283,6 +283,11 @@ print(response.choices[0].message.content)
 ## 📝 Developer & Community
 
 *   **Changelog**:
+    *   **v4.1.23 (2026-02-25)**:
+        -   **[Core Fix] Convert v1beta thinkingLevel to v1internal thinkingBudget (PR #2095)**:
+            -   **Root Cause**: Clients like OpenClaw and Cline send v1beta-style `thinkingLevel` strings (`"NONE"` / `"LOW"` / `"MEDIUM"` / `"HIGH"`) in `generationConfig.thinkingConfig`. When AGM proxies through Google's v1internal API, Google rejects `thinkingLevel` with `400 INVALID_ARGUMENT` because v1internal only accepts the numeric `thinkingBudget`.
+            -   **Fix**: Inserted an early conversion step inside `wrap_request()` before any existing budget processing logic: detect the `thinkingLevel` string, map it to a numeric `thinkingBudget` (`NONE`→0, `LOW`→4096, `MEDIUM`→8192, `HIGH`→24576), remove `thinkingLevel`, and write `thinkingBudget`. This ensures all downstream logic (budget capping, `maxOutputTokens` adjustment, adaptive detection) sees the correct numeric budget.
+            -   **Testing**: Verified with OpenClaw sending `thinkingLevel: "LOW"` to `gemini-3.1-pro-high` via Gemini native protocol — requests now return `200 OK` instead of the previous `400` error.
     *   **v4.1.22 (2026-02-21)**:
         -   **[Important Warning] 2api Risk Control Alert**:
             -   Due to recent Google risk control measures, utilizing 2api features significantly increases the probability of your account being flagged.
