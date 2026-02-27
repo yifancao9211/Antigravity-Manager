@@ -103,9 +103,12 @@ fn get_version_macos(exe_path: &PathBuf) -> Result<AntigravityVersion, String> {
 #[cfg(target_os = "windows")]
 fn get_version_windows(exe_path: &PathBuf) -> Result<AntigravityVersion, String> {
     use std::process::Command;
+    use crate::utils::command::CommandExtWrapper;
     
     // Windows: 使用 PowerShell 读取文件版本信息
-    let output = Command::new("powershell")
+    let mut cmd = Command::new("powershell");
+    let output = cmd
+        .creation_flags_windows()
         .args([
             "-Command",
             &format!(
