@@ -645,7 +645,9 @@ pub async fn open_data_folder() -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        use crate::utils::command::CommandExtWrapper;
         std::process::Command::new("explorer")
+            .creation_flags_windows()
             .arg(path)
             .spawn()
             .map_err(|e| format!("打开文件夹失败: {}", e))?;
