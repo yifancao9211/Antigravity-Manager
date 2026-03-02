@@ -253,6 +253,8 @@ jobs:
   docker-build-amd64:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' && (github.repository == 'lbjlaq/Antigravity-Manager' || vars.ENABLE_DOCKER_PUSH == 'true')
+    env:
+      IMAGE_REPO: ${{ secrets.DOCKERHUB_USERNAME }}/antigravity-manager
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -274,14 +276,16 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ${{ github.repository_owner }}/antigravity-manager:latest-amd64
-            ${{ github.repository_owner }}/antigravity-manager:${{ github.ref_name }}-amd64
+            ${{ env.IMAGE_REPO }}:latest-amd64
+            ${{ env.IMAGE_REPO }}:${{ github.ref_name }}-amd64
           build-args: |
             USE_MIRROR=false
 
   docker-build-arm64:
     runs-on: ubuntu-24.04-arm
     if: github.event_name != 'pull_request' && (github.repository == 'lbjlaq/Antigravity-Manager' || vars.ENABLE_DOCKER_PUSH == 'true')
+    env:
+      IMAGE_REPO: ${{ secrets.DOCKERHUB_USERNAME }}/antigravity-manager
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -303,8 +307,8 @@ jobs:
           platforms: linux/arm64
           push: true
           tags: |
-            ${{ github.repository_owner }}/antigravity-manager:latest-arm64
-            ${{ github.repository_owner }}/antigravity-manager:${{ github.ref_name }}-arm64
+            ${{ env.IMAGE_REPO }}:latest-arm64
+            ${{ env.IMAGE_REPO }}:${{ github.ref_name }}-arm64
           build-args: |
             USE_MIRROR=false
 
@@ -312,6 +316,8 @@ jobs:
     needs: [docker-build-amd64, docker-build-arm64]
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' && (github.repository == 'lbjlaq/Antigravity-Manager' || vars.ENABLE_DOCKER_PUSH == 'true')
+    env:
+      IMAGE_REPO: ${{ secrets.DOCKERHUB_USERNAME }}/antigravity-manager
     steps:
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -321,10 +327,10 @@ jobs:
 
       - name: Create and push manifest
         run: |
-          docker buildx imagetools create -t ${{ github.repository_owner }}/antigravity-manager:latest \
-            ${{ github.repository_owner }}/antigravity-manager:latest-amd64 \
-            ${{ github.repository_owner }}/antigravity-manager:latest-arm64
+          docker buildx imagetools create -t ${{ env.IMAGE_REPO }}:latest \
+            ${{ env.IMAGE_REPO }}:latest-amd64 \
+            ${{ env.IMAGE_REPO }}:latest-arm64
 
-          docker buildx imagetools create -t ${{ github.repository_owner }}/antigravity-manager:${{ github.ref_name }} \
-            ${{ github.repository_owner }}/antigravity-manager:${{ github.ref_name }}-amd64 \
-            ${{ github.repository_owner }}/antigravity-manager:${{ github.ref_name }}-arm64
+          docker buildx imagetools create -t ${{ env.IMAGE_REPO }}:${{ github.ref_name }} \
+            ${{ env.IMAGE_REPO }}:${{ github.ref_name }}-amd64 \
+            ${{ env.IMAGE_REPO }}:${{ github.ref_name }}-arm64
