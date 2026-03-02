@@ -53,6 +53,7 @@ jobs:
         run: npm install --legacy-peer-deps
 
       - name: Prepare Tauri signing key
+        shell: bash
         env:
           RAW_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
