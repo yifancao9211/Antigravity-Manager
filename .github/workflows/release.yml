@@ -64,45 +64,63 @@ jobs:
             grep -Eq "^untrusted comment: (mini|r)sign .*secret key" "$1"
           }
 
+          decode_base64_to_file() {
+            local input="$1"
+            local output="$2"
+
+            if printf '%s' "$input" | base64 --decode > "$output" 2>/dev/null; then
+              return 0
+            elif printf '%s' "$input" | base64 -d > "$output" 2>/dev/null; then
+              return 0
+            elif printf '%s' "$input" | base64 -D > "$output" 2>/dev/null; then
+              return 0
+            elif printf '%s' "$input" | openssl base64 -d -A > "$output" 2>/dev/null; then
+              return 0
+            fi
+
+            return 1
+          }
+
           if [ -z "${RAW_PRIVATE_KEY:-}" ]; then
             echo "::error::Missing secret TAURI_SIGNING_PRIVATE_KEY"
             exit 1
           fi
 
           KEY_FILE="$RUNNER_TEMP/tauri-signing.key"
+          DECODED_FILE="$RUNNER_TEMP/tauri-signing-decoded.key"
+          NORMALIZED_KEY=""
           echo "::add-mask::$RAW_PRIVATE_KEY"
 
-          # Accept raw minisign key content directly.
-          printf '%s' "$RAW_PRIVATE_KEY" > "$KEY_FILE"
+          # Preferred path: secret is already base64 (tauri signer output).
+          RAW_PRIVATE_KEY_ONE_LINE="$(printf '%s' "$RAW_PRIVATE_KEY" | tr -d '\r\n')"
+          if decode_base64_to_file "$RAW_PRIVATE_KEY_ONE_LINE" "$DECODED_FILE" && is_valid_signing_key "$DECODED_FILE"; then
+            NORMALIZED_KEY="$RAW_PRIVATE_KEY_ONE_LINE"
+          fi
 
-          # If content does not look like a signing key, try common CI encodings.
-          if ! is_valid_signing_key "$KEY_FILE"; then
-            if printf '%s' "$RAW_PRIVATE_KEY" | base64 --decode > "$KEY_FILE" 2>/dev/null; then
-              true
-            elif printf '%s' "$RAW_PRIVATE_KEY" | base64 -d > "$KEY_FILE" 2>/dev/null; then
-              true
-            elif printf '%s' "$RAW_PRIVATE_KEY" | base64 -D > "$KEY_FILE" 2>/dev/null; then
-              true
-            elif printf '%s' "$RAW_PRIVATE_KEY" | openssl base64 -d -A > "$KEY_FILE" 2>/dev/null; then
-              true
-            else
-              # Support secrets stored with literal \n.
+          # Fallback path: secret is raw key content (possibly with literal \n).
+          if [ -z "$NORMALIZED_KEY" ]; then
+            printf '%s' "$RAW_PRIVATE_KEY" > "$KEY_FILE"
+            if ! is_valid_signing_key "$KEY_FILE"; then
               printf '%b' "$RAW_PRIVATE_KEY" > "$KEY_FILE"
+            fi
+            if is_valid_signing_key "$KEY_FILE"; then
+              NORMALIZED_KEY="$(base64 < "$KEY_FILE" | tr -d '\r\n')"
             fi
           fi
 
-          if ! is_valid_signing_key "$KEY_FILE"; then
-            echo "::error::Invalid TAURI_SIGNING_PRIVATE_KEY format. Expected rsign/minisign secret key content, base64-encoded content, or escaped newlines."
+          if [ -z "$NORMALIZED_KEY" ]; then
+            echo "::error::Invalid TAURI_SIGNING_PRIVATE_KEY format. Expected base64 key from tauri signer, or raw rsign/minisign secret key content."
             exit 1
           fi
 
+          echo "::add-mask::$NORMALIZED_KEY"
+          echo "TAURI_SIGNING_PRIVATE_KEY=$NORMALIZED_KEY" >> "$GITHUB_ENV"
+
           {
-            echo 'TAURI_SIGNING_PRIVATE_KEY<<EOF'
-            cat "$KEY_FILE"
+            echo 'TAURI_SIGNING_PRIVATE_KEY_PASSWORD<<EOF'
+            printf '%s\n' "${PRIVATE_KEY_PASSWORD:-}"
             echo 'EOF'
           } >> "$GITHUB_ENV"
-
-          echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${PRIVATE_KEY_PASSWORD}" >> "$GITHUB_ENV"
 
       - name: Build the app
         run: npm run tauri build -- ${{ matrix.args }}
