@@ -52,10 +52,50 @@ jobs:
       - name: Install frontend dependencies
         run: npm install --legacy-peer-deps
 
-      - name: Build the app
+      - name: Prepare Tauri signing key
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RAW_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${RAW_PRIVATE_KEY:-}" ]; then
+            echo "::error::Missing secret TAURI_SIGNING_PRIVATE_KEY"
+            exit 1
+          fi
+
+          KEY_FILE="$RUNNER_TEMP/tauri-signing.key"
+          echo "::add-mask::$RAW_PRIVATE_KEY"
+
+          # Accept raw minisign key content directly.
+          printf '%s' "$RAW_PRIVATE_KEY" > "$KEY_FILE"
+
+          # If content does not look like a minisign key, try common CI encodings.
+          if ! grep -q "untrusted comment: minisign" "$KEY_FILE"; then
+            if printf '%s' "$RAW_PRIVATE_KEY" | base64 --decode > "$KEY_FILE" 2>/dev/null; then
+              true
+            elif printf '%s' "$RAW_PRIVATE_KEY" | base64 -d > "$KEY_FILE" 2>/dev/null; then
+              true
+            else
+              # Support secrets stored with literal \n.
+              printf '%b' "$RAW_PRIVATE_KEY" > "$KEY_FILE"
+            fi
+          fi
+
+          if ! grep -q "untrusted comment: minisign" "$KEY_FILE"; then
+            echo "::error::Invalid TAURI_SIGNING_PRIVATE_KEY format. Expected minisign secret key content, base64-encoded content, or escaped newlines."
+            exit 1
+          fi
+
+          {
+            echo 'TAURI_SIGNING_PRIVATE_KEY<<EOF'
+            cat "$KEY_FILE"
+            echo 'EOF'
+          } >> "$GITHUB_ENV"
+
+          echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${PRIVATE_KEY_PASSWORD}" >> "$GITHUB_ENV"
+
+      - name: Build the app
         run: npm run tauri build -- ${{ matrix.args }}
 
       # 3. 处理 macOS 架构重命名冲突 (解决 422 Already Exists)
