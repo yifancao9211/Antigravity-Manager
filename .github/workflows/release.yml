@@ -59,6 +59,10 @@ jobs:
         run: |
           set -euo pipefail
 
+          is_valid_signing_key() {
+            grep -Eq "^untrusted comment: (mini|r)sign .*secret key" "$1"
+          }
+
           if [ -z "${RAW_PRIVATE_KEY:-}" ]; then
             echo "::error::Missing secret TAURI_SIGNING_PRIVATE_KEY"
             exit 1
@@ -70,11 +74,15 @@ jobs:
           # Accept raw minisign key content directly.
           printf '%s' "$RAW_PRIVATE_KEY" > "$KEY_FILE"
 
-          # If content does not look like a minisign key, try common CI encodings.
-          if ! grep -q "untrusted comment: minisign" "$KEY_FILE"; then
+          # If content does not look like a signing key, try common CI encodings.
+          if ! is_valid_signing_key "$KEY_FILE"; then
             if printf '%s' "$RAW_PRIVATE_KEY" | base64 --decode > "$KEY_FILE" 2>/dev/null; then
               true
             elif printf '%s' "$RAW_PRIVATE_KEY" | base64 -d > "$KEY_FILE" 2>/dev/null; then
+              true
+            elif printf '%s' "$RAW_PRIVATE_KEY" | base64 -D > "$KEY_FILE" 2>/dev/null; then
+              true
+            elif printf '%s' "$RAW_PRIVATE_KEY" | openssl base64 -d -A > "$KEY_FILE" 2>/dev/null; then
               true
             else
               # Support secrets stored with literal \n.
@@ -82,8 +90,8 @@ jobs:
             fi
           fi
 
-          if ! grep -q "untrusted comment: minisign" "$KEY_FILE"; then
-            echo "::error::Invalid TAURI_SIGNING_PRIVATE_KEY format. Expected minisign secret key content, base64-encoded content, or escaped newlines."
+          if ! is_valid_signing_key "$KEY_FILE"; then
+            echo "::error::Invalid TAURI_SIGNING_PRIVATE_KEY format. Expected rsign/minisign secret key content, base64-encoded content, or escaped newlines."
             exit 1
           fi
 
