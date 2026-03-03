@@ -3,12 +3,11 @@ use tracing::info;
 use crate::models::TokenData;
 
 // OpenAI Codex OAuth configuration
-// Client ID from the openai/codex CLI open source repository
-const CODEX_CLIENT_ID: &str = "app_sOb0KOmdLU9kOJVxxGSFEFkH"; // TODO: verify from openai/codex source
-const CODEX_AUTH_URL: &str = "https://auth.openai.com/authorize";
+// Client ID verified from opencode (sst/opencode) source: packages/opencode/src/plugin/codex.ts
+const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+const CODEX_AUTH_URL: &str = "https://auth.openai.com/oauth/authorize";
 const CODEX_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const CODEX_USERINFO_URL: &str = "https://api.openai.com/v1/me";
-const CODEX_AUDIENCE: &str = "https://api.openai.com/v1";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CodexTokenResponse {
@@ -62,10 +61,12 @@ pub fn get_codex_auth_url(redirect_uri: &str, state: &str) -> (String, String) {
         ("redirect_uri", redirect_uri),
         ("response_type", "code"),
         ("scope", "openid profile email offline_access"),
-        ("audience", CODEX_AUDIENCE),
         ("code_challenge", &challenge),
         ("code_challenge_method", "S256"),
+        ("id_token_add_organizations", "true"),
+        ("codex_cli_simplified_flow", "true"),
         ("state", state),
+        ("originator", "antigravity"),
     ];
 
     let url = url::Url::parse_with_params(CODEX_AUTH_URL, &params)
