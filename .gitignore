@@ -46,3 +46,8 @@ __pycache__/
 
 DOCKER_DEPLOYMENT.md
 pnpm-lock.yaml
+
+# Claude Code / OMC tooling
+.claude/
+.omc/
+src-tauri/.omc/

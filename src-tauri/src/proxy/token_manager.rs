@@ -1929,7 +1929,9 @@ impl TokenManager {
                     Err(e) => Err(format!(
                         "[Warmup] Token refresh failed for {}: {}",
                         email, e
-            )),
+                    )),
+                }
+            }
         }
     }
 

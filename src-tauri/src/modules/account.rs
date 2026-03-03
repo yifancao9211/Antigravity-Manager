@@ -473,6 +473,7 @@ fn rebuild_index_from_accounts_in_dir(data_dir: &PathBuf) -> Result<AccountIndex
                                         protected_models: account.protected_models,
                                         created_at: account.created_at,
                                         last_used: account.last_used,
+                                        provider: account.provider,
                                     });
                             }
                             Err(e) => {
@@ -731,6 +732,7 @@ pub fn add_account(
         protected_models: account.protected_models.clone(),
         created_at: account.created_at,
         last_used: account.last_used,
+        provider: account.provider.clone(),
     });
 
     // If first account, set as current
@@ -766,6 +768,7 @@ pub fn add_account_raw(account: Account) -> Result<Account, String> {
             protected_models: account.protected_models.clone(),
             created_at: account.created_at,
             last_used: account.last_used,
+            provider: account.provider.clone(),
         });
 
         if index.current_account_id.is_none() {
