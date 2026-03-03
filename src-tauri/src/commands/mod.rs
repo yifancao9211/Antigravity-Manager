@@ -564,11 +564,18 @@ pub async fn start_codex_oauth_login(
     use tokio::net::TcpListener;
     use tauri::Url;
 
-    // Bind local listener to receive OAuth callback (use fixed port like opencode)
-    let listener = TcpListener::bind("127.0.0.1:1455")
-        .await
-        .map_err(|e| format!("Failed to bind OAuth callback listener on port 1455: {}", e))?;
-    let port = 1455u16;
+    // Bind local listener to receive OAuth callback
+    // Try fixed port 1455 first (matching opencode), fall back to random port
+    let listener = match TcpListener::bind("127.0.0.1:1455").await {
+        Ok(l) => l,
+        Err(_) => TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|e| format!("Failed to bind OAuth callback listener: {}", e))?,
+    };
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("Failed to get listener port: {}", e))?
+        .port();
 
     let redirect_uri = format!("http://localhost:{}/auth/callback", port);
     let state_str = uuid::Uuid::new_v4().to_string();
