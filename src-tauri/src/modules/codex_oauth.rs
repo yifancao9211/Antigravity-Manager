@@ -33,13 +33,13 @@ fn generate_pkce() -> (String, String) {
     use base64::Engine;
     use rand::Rng;
 
+    // Match opencode's PKCE: 43 chars from RFC 7636 unreserved charset
+    let charset = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
     let mut rng = rand::thread_rng();
-    let verifier: String = (0..128)
+    let verifier: String = (0..43)
         .map(|_| {
-            let idx = rng.gen_range(0..62u8);
-            if idx < 10 { (b'0' + idx) as char }
-            else if idx < 36 { (b'A' + idx - 10) as char }
-            else { (b'a' + idx - 36) as char }
+            let idx = rng.gen_range(0..charset.len());
+            charset[idx] as char
         })
         .collect();
 
