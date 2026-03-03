@@ -20,17 +20,21 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
     const { t } = useTranslation();
     const fetchAccounts = useAccountStore(state => state.fetchAccounts);
     const [isOpen, setIsOpen] = useState(false);
+    const [selectedProvider, setSelectedProvider] = useState<'google' | 'codex'>('google');
     const [activeTab, setActiveTab] = useState<'oauth' | 'token' | 'import'>(isTauri() ? 'oauth' : 'token');
+    const [codexActiveTab, setCodexActiveTab] = useState<'oauth' | 'token' | 'import'>('oauth');
     const [refreshToken, setRefreshToken] = useState('');
     const [oauthUrl, setOauthUrl] = useState('');
     const [oauthUrlCopied, setOauthUrlCopied] = useState(false);
     const [manualCode, setManualCode] = useState('');
+    const [codexToken, setCodexToken] = useState('');
+    const [codexRefreshToken, setCodexRefreshToken] = useState('');
 
     // UI State
     const [status, setStatus] = useState<Status>('idle');
     const [message, setMessage] = useState('');
 
-    const { startOAuthLogin, completeOAuthLogin, cancelOAuthLogin, importFromDb, importV1Accounts, importFromCustomDb } = useAccountStore();
+    const { startOAuthLogin, completeOAuthLogin, cancelOAuthLogin, importFromDb, importV1Accounts, importFromCustomDb, addCodexAccountManual, importCodexFromFile, startCodexOAuthLogin } = useAccountStore();
 
     const oauthUrlRef = useRef(oauthUrl);
     const statusRef = useRef(status);
@@ -148,6 +152,8 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
         setRefreshToken('');
         setOauthUrl('');
         setOauthUrlCopied(false);
+        setCodexToken('');
+        setCodexRefreshToken('');
     };
 
     const handleAction = async (
@@ -432,6 +438,25 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
         }
     };
 
+    const handleCodexOAuth = () => {
+        handleAction(t('accounts.add.codex_oauth'), startCodexOAuthLogin);
+    };
+
+    const handleCodexTokenSubmit = async () => {
+        if (!codexToken.trim()) {
+            setStatus('error');
+            setMessage(t('accounts.add.token.error_token'));
+            return;
+        }
+        await handleAction(t('accounts.add.codex_token'), () =>
+            addCodexAccountManual(codexToken.trim(), codexRefreshToken.trim() || undefined)
+        );
+    };
+
+    const handleCodexImport = () => {
+        handleAction(t('accounts.add.codex_import'), importCodexFromFile);
+    };
+
     // 状态提示组件
     const StatusAlert = () => {
         if (status === 'idle' || !message) return null;
@@ -484,40 +509,91 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
                     <div className="bg-white dark:bg-base-100 text-gray-900 dark:text-base-content rounded-2xl shadow-2xl w-full max-w-lg p-6 relative z-[10] m-4 max-h-[90vh] overflow-y-auto">
                         <h3 className="font-bold text-lg mb-4">{t('accounts.add.title')}</h3>
 
-                        {/* Tab 导航 - 胶囊风格 */}
-
-                        <div className="bg-gray-100 dark:bg-base-200 p-1 rounded-xl mb-6 grid grid-cols-3 gap-1">
+                        {/* Provider selection */}
+                        <div className="flex gap-2 mb-4">
                             <button
-                                className={`py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200 ${activeTab === 'oauth'
-                                    ? 'bg-white dark:bg-base-100 shadow-sm text-blue-600 dark:text-blue-400'
-                                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-200/50 dark:hover:bg-base-300'
-                                    } `}
-                                onClick={() => setActiveTab('oauth')}
+                                className={`flex-1 p-3 rounded-lg border-2 transition-all text-left ${selectedProvider === 'google' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700'}`}
+                                onClick={() => setSelectedProvider('google')}
                             >
-                                {t('accounts.add.tabs.oauth')}
+                                <div className="font-medium text-sm text-gray-900 dark:text-gray-100">{t('accounts.add.provider_google')}</div>
+                                <div className="text-xs text-gray-500">Google / Gemini / Claude</div>
                             </button>
                             <button
-                                className={`py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200 ${activeTab === 'token'
-                                    ? 'bg-white dark:bg-base-100 shadow-sm text-blue-600 dark:text-blue-400'
-                                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-200/50 dark:hover:bg-base-300'
-                                    } `}
-                                onClick={() => setActiveTab('token')}
+                                className={`flex-1 p-3 rounded-lg border-2 transition-all text-left ${selectedProvider === 'codex' ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'border-gray-200 dark:border-gray-700'}`}
+                                onClick={() => setSelectedProvider('codex')}
                             >
-                                {t('accounts.add.tabs.token')}
-                            </button>
-                            <button
-                                className={`py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200 ${activeTab === 'import'
-                                    ? 'bg-white dark:bg-base-100 shadow-sm text-blue-600 dark:text-blue-400'
-                                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-200/50 dark:hover:bg-base-300'
-                                    } `}
-                                onClick={() => setActiveTab('import')}
-                            >
-                                {t('accounts.add.tabs.import')}
+                                <div className="font-medium text-sm text-gray-900 dark:text-gray-100">{t('accounts.add.provider_codex')}</div>
+                                <div className="text-xs text-gray-500">OpenAI / GPT / O-series</div>
                             </button>
                         </div>
 
+                        {/* Tab 导航 - 胶囊风格 */}
+                        {selectedProvider === 'google' && (
+                            <div className="bg-gray-100 dark:bg-base-200 p-1 rounded-xl mb-6 grid grid-cols-3 gap-1">
+                                <button
+                                    className={`py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200 ${activeTab === 'oauth'
+                                        ? 'bg-white dark:bg-base-100 shadow-sm text-blue-600 dark:text-blue-400'
+                                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-200/50 dark:hover:bg-base-300'
+                                        } `}
+                                    onClick={() => setActiveTab('oauth')}
+                                >
+                                    {t('accounts.add.tabs.oauth')}
+                                </button>
+                                <button
+                                    className={`py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200 ${activeTab === 'token'
+                                        ? 'bg-white dark:bg-base-100 shadow-sm text-blue-600 dark:text-blue-400'
+                                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-200/50 dark:hover:bg-base-300'
+                                        } `}
+                                    onClick={() => setActiveTab('token')}
+                                >
+                                    {t('accounts.add.tabs.token')}
+                                </button>
+                                <button
+                                    className={`py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200 ${activeTab === 'import'
+                                        ? 'bg-white dark:bg-base-100 shadow-sm text-blue-600 dark:text-blue-400'
+                                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-200/50 dark:hover:bg-base-300'
+                                        } `}
+                                    onClick={() => setActiveTab('import')}
+                                >
+                                    {t('accounts.add.tabs.import')}
+                                </button>
+                            </div>
+                        )}
+
+                        {selectedProvider === 'codex' && (
+                            <div className="bg-gray-100 dark:bg-base-200 p-1 rounded-xl mb-6 grid grid-cols-3 gap-1">
+                                <button
+                                    className={`py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200 ${codexActiveTab === 'oauth'
+                                        ? 'bg-white dark:bg-base-100 shadow-sm text-green-600 dark:text-green-400'
+                                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-200/50 dark:hover:bg-base-300'
+                                        } `}
+                                    onClick={() => setCodexActiveTab('oauth')}
+                                >
+                                    {t('accounts.add.codex_oauth')}
+                                </button>
+                                <button
+                                    className={`py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200 ${codexActiveTab === 'token'
+                                        ? 'bg-white dark:bg-base-100 shadow-sm text-green-600 dark:text-green-400'
+                                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-200/50 dark:hover:bg-base-300'
+                                        } `}
+                                    onClick={() => setCodexActiveTab('token')}
+                                >
+                                    {t('accounts.add.codex_token')}
+                                </button>
+                                <button
+                                    className={`py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200 ${codexActiveTab === 'import'
+                                        ? 'bg-white dark:bg-base-100 shadow-sm text-green-600 dark:text-green-400'
+                                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-200/50 dark:hover:bg-base-300'
+                                        } `}
+                                    onClick={() => setCodexActiveTab('import')}
+                                >
+                                    {t('accounts.add.codex_import')}
+                                </button>
+                            </div>
+                        )}
+
                         {/* 添加 Web 模式提示 */}
-                        {!isTauri() && (
+                        {!isTauri() && selectedProvider === 'google' && (
                             <div className="alert alert-info mb-4 text-xs py-2 flex items-center gap-2 bg-blue-50 dark:bg-blue-900/10 text-blue-600 dark:text-blue-400 border-blue-100 dark:border-blue-800">
                                 <Info className="w-4 h-4" />
                                 <span>{t('accounts.add.oauth.web_hint', '将在新窗口中打开 Google 登录页')}</span>
@@ -528,164 +604,251 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
                         <StatusAlert />
 
                         <div className="min-h-[200px]">
-                            {/* OAuth 授权 */}
-                            {activeTab === 'oauth' && (
-                                <div className="space-y-6 py-4">
-                                    <div className="text-center space-y-3">
-                                        <div className="bg-blue-50 dark:bg-blue-900/20 p-6 rounded-full w-20 h-20 mx-auto flex items-center justify-center">
-                                            <Globe className="w-10 h-10 text-blue-500" />
-                                        </div>
-                                        <div className="space-y-1">
-                                            <h4 className="font-medium text-gray-900 dark:text-gray-100">{t('accounts.add.oauth.recommend')}</h4>
-                                            <p className="text-sm text-gray-500 dark:text-gray-400 max-w-xs mx-auto">
-                                                {t('accounts.add.oauth.desc')}
-                                            </p>
-                                        </div>
-                                    </div>
-                                    <div className="space-y-3">
-                                        <button
-                                            className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl shadow-lg shadow-blue-500/20 transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
-                                            onClick={handleOAuth}
-                                            disabled={status === 'loading' || status === 'success'}
-                                        >
-                                            {status === 'loading' ? t('accounts.add.oauth.btn_waiting') : t('accounts.add.oauth.btn_start')}
-                                        </button>
-
-                                        {oauthUrl && (
-                                            <div className="space-y-2">
-                                                <div className="text-[11px] text-gray-500 dark:text-gray-400 text-left">
-                                                    {t('accounts.add.oauth.link_label')}
+                            {selectedProvider === 'google' && (
+                                <>
+                                    {/* OAuth 授权 */}
+                                    {activeTab === 'oauth' && (
+                                        <div className="space-y-6 py-4">
+                                            <div className="text-center space-y-3">
+                                                <div className="bg-blue-50 dark:bg-blue-900/20 p-6 rounded-full w-20 h-20 mx-auto flex items-center justify-center">
+                                                    <Globe className="w-10 h-10 text-blue-500" />
                                                 </div>
+                                                <div className="space-y-1">
+                                                    <h4 className="font-medium text-gray-900 dark:text-gray-100">{t('accounts.add.oauth.recommend')}</h4>
+                                                    <p className="text-sm text-gray-500 dark:text-gray-400 max-w-xs mx-auto">
+                                                        {t('accounts.add.oauth.desc')}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                            <div className="space-y-3">
                                                 <button
-                                                    type="button"
-                                                    className="w-full px-4 py-2 bg-white dark:bg-base-100 text-gray-600 dark:text-gray-300 text-sm font-medium rounded-xl border border-dashed border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-base-200 transition-all flex items-center gap-2"
-                                                    onClick={handleCopyUrl}
-                                                    title={t('accounts.add.oauth.link_click_to_copy')}
-                                                >
-                                                    {oauthUrlCopied ? (
-                                                        <Check className="w-3.5 h-3.5 text-emerald-600" />
-                                                    ) : (
-                                                        <Copy className="w-3.5 h-3.5" />
-                                                    )}
-                                                    <code className="text-[11px] font-mono truncate flex-1 text-left">
-                                                        {oauthUrl}
-                                                    </code>
-                                                    <span className="text-[11px] whitespace-nowrap">
-                                                        {oauthUrlCopied ? t('accounts.add.oauth.copied') : t('accounts.add.oauth.copy_link')}
-                                                    </span>
-                                                </button>
-
-                                                <button
-                                                    type="button"
-                                                    className="w-full px-4 py-2 bg-white dark:bg-base-100 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-xl border border-gray-200 dark:border-base-300 hover:bg-gray-50 dark:hover:bg-base-200 transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
-                                                    onClick={handleCompleteOAuth}
+                                                    className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl shadow-lg shadow-blue-500/20 transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                                                    onClick={handleOAuth}
                                                     disabled={status === 'loading' || status === 'success'}
                                                 >
-                                                    <CheckCircle2 className="w-4 h-4" />
-                                                    {t('accounts.add.oauth.btn_finish')}
+                                                    {status === 'loading' ? t('accounts.add.oauth.btn_waiting') : t('accounts.add.oauth.btn_start')}
                                                 </button>
-                                            </div>
-                                        )}
 
-                                        {/* Manual Code Entry - Always enabled to rescue stuck flows */}
-                                        <div className="pt-4 mt-2 border-t border-gray-100 dark:border-base-200">
-                                            <div className="text-[11px] font-medium text-gray-400 dark:text-gray-500 mb-2 uppercase tracking-wider">
-                                                {t('accounts.add.oauth.manual_hint')}
-                                            </div>
-                                            <div className="relative group/manual flex gap-2">
-                                                <div className="relative flex-1">
-                                                    <input
-                                                        type="text"
-                                                        className="w-full text-xs py-2 px-3 bg-white dark:bg-base-100 border border-gray-200 dark:border-base-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all placeholder:text-gray-300 dark:placeholder:text-gray-600"
-                                                        placeholder={t('accounts.add.oauth.manual_placeholder')}
-                                                        value={manualCode}
-                                                        onChange={(e) => setManualCode(e.target.value)}
-                                                    />
+                                                {oauthUrl && (
+                                                    <div className="space-y-2">
+                                                        <div className="text-[11px] text-gray-500 dark:text-gray-400 text-left">
+                                                            {t('accounts.add.oauth.link_label')}
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            className="w-full px-4 py-2 bg-white dark:bg-base-100 text-gray-600 dark:text-gray-300 text-sm font-medium rounded-xl border border-dashed border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-base-200 transition-all flex items-center gap-2"
+                                                            onClick={handleCopyUrl}
+                                                            title={t('accounts.add.oauth.link_click_to_copy')}
+                                                        >
+                                                            {oauthUrlCopied ? (
+                                                                <Check className="w-3.5 h-3.5 text-emerald-600" />
+                                                            ) : (
+                                                                <Copy className="w-3.5 h-3.5" />
+                                                            )}
+                                                            <code className="text-[11px] font-mono truncate flex-1 text-left">
+                                                                {oauthUrl}
+                                                            </code>
+                                                            <span className="text-[11px] whitespace-nowrap">
+                                                                {oauthUrlCopied ? t('accounts.add.oauth.copied') : t('accounts.add.oauth.copy_link')}
+                                                            </span>
+                                                        </button>
+
+                                                        <button
+                                                            type="button"
+                                                            className="w-full px-4 py-2 bg-white dark:bg-base-100 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-xl border border-gray-200 dark:border-base-300 hover:bg-gray-50 dark:hover:bg-base-200 transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                                                            onClick={handleCompleteOAuth}
+                                                            disabled={status === 'loading' || status === 'success'}
+                                                        >
+                                                            <CheckCircle2 className="w-4 h-4" />
+                                                            {t('accounts.add.oauth.btn_finish')}
+                                                        </button>
+                                                    </div>
+                                                )}
+
+                                                {/* Manual Code Entry - Always enabled to rescue stuck flows */}
+                                                <div className="pt-4 mt-2 border-t border-gray-100 dark:border-base-200">
+                                                    <div className="text-[11px] font-medium text-gray-400 dark:text-gray-500 mb-2 uppercase tracking-wider">
+                                                        {t('accounts.add.oauth.manual_hint')}
+                                                    </div>
+                                                    <div className="relative group/manual flex gap-2">
+                                                        <div className="relative flex-1">
+                                                            <input
+                                                                type="text"
+                                                                className="w-full text-xs py-2 px-3 bg-white dark:bg-base-100 border border-gray-200 dark:border-base-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all placeholder:text-gray-300 dark:placeholder:text-gray-600"
+                                                                placeholder={t('accounts.add.oauth.manual_placeholder')}
+                                                                value={manualCode}
+                                                                onChange={(e) => setManualCode(e.target.value)}
+                                                            />
+                                                        </div>
+                                                        <button
+                                                            className="px-4 py-2 bg-neutral text-white dark:bg-white dark:text-neutral text-xs font-semibold rounded-xl hover:opacity-90 active:scale-95 transition-all disabled:opacity-50 disabled:scale-100 flex items-center gap-1.5"
+                                                            onClick={handleManualSubmit}
+                                                            disabled={!manualCode.trim()}
+                                                        >
+                                                            <Link2 className="w-3.5 h-3.5" />
+                                                            {t('common.submit')}
+                                                        </button>
+                                                    </div>
                                                 </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Refresh Token */}
+                                    {activeTab === 'token' && (
+                                        <div className="space-y-4 py-2">
+                                            <div className="bg-gray-50 dark:bg-base-200 p-4 rounded-lg border border-gray-200 dark:border-base-300">
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <span className="text-sm font-medium text-gray-500 dark:text-gray-400">{t('accounts.add.token.label')}</span>
+                                                </div>
+                                                <textarea
+                                                    className="textarea textarea-bordered w-full h-32 font-mono text-xs leading-relaxed focus:outline-none focus:border-blue-500 transition-colors bg-white dark:bg-base-100 text-gray-900 dark:text-base-content border-gray-300 dark:border-base-300 placeholder:text-gray-400"
+                                                    placeholder={t('accounts.add.token.placeholder')}
+                                                    value={refreshToken}
+                                                    onChange={(e) => setRefreshToken(e.target.value)}
+                                                    disabled={status === 'loading' || status === 'success'}
+                                                />
+                                                <p className="text-[10px] text-gray-400 mt-2">
+                                                    {t('accounts.add.token.hint')}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* 从数据库导入 */}
+                                    {activeTab === 'import' && (
+                                        <div className="space-y-6 py-2">
+                                            <div className="space-y-2">
+                                                <h4 className="font-semibold flex items-center gap-2 text-gray-800 dark:text-gray-200">
+                                                    <Database className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                                                    {t('accounts.add.import.scheme_a')}
+                                                </h4>
+                                                <p className="text-xs text-gray-500 dark:text-gray-400">
+                                                    {t('accounts.add.import.scheme_a_desc')}
+                                                </p>
                                                 <button
-                                                    className="px-4 py-2 bg-neutral text-white dark:bg-white dark:text-neutral text-xs font-semibold rounded-xl hover:opacity-90 active:scale-95 transition-all disabled:opacity-50 disabled:scale-100 flex items-center gap-1.5"
-                                                    onClick={handleManualSubmit}
-                                                    disabled={!manualCode.trim()}
+                                                    className="w-full px-4 py-3 bg-gray-50 dark:bg-base-200 text-gray-700 dark:text-gray-300 font-medium rounded-xl border border-gray-200 dark:border-base-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:border-blue-200 dark:hover:border-blue-800 hover:text-blue-600 dark:hover:text-blue-400 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed mb-2 shadow-sm"
+                                                    onClick={handleImportDb}
+                                                    disabled={status === 'loading' || status === 'success'}
                                                 >
-                                                    <Link2 className="w-3.5 h-3.5" />
-                                                    {t('common.submit')}
+                                                    <CheckCircle2 className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                                    {t('accounts.add.import.btn_db')}
+                                                </button>
+                                                <button
+                                                    className="w-full px-4 py-3 bg-gray-50 dark:bg-base-200 text-gray-700 dark:text-gray-300 font-medium rounded-xl border border-gray-200 dark:border-base-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 hover:border-indigo-200 dark:hover:border-indigo-800 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                                                    onClick={handleImportCustomDb}
+                                                    disabled={status === 'loading' || status === 'success'}
+                                                >
+                                                    <Database className="w-4 h-4" />
+                                                    {t('accounts.add.import.btn_custom_db') || 'Custom DB (state.vscdb)'}
+                                                </button>
+                                            </div>
+
+                                            <div className="divider text-xs text-gray-300 dark:text-gray-600">{t('accounts.add.import.or')}</div>
+
+                                            <div className="space-y-2">
+                                                <h4 className="font-semibold flex items-center gap-2 text-gray-800 dark:text-gray-200">
+                                                    <FileClock className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                                                    {t('accounts.add.import.scheme_b')}
+                                                </h4>
+                                                <p className="text-xs text-gray-500 dark:text-gray-400">
+                                                    {t('accounts.add.import.scheme_b_desc')}
+                                                </p>
+                                                <button
+                                                    className="w-full px-4 py-3 bg-gray-50 dark:bg-base-200 text-gray-700 dark:text-gray-300 font-medium rounded-xl border border-gray-200 dark:border-base-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 hover:border-emerald-200 dark:hover:border-emerald-800 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                                                    onClick={handleImportV1}
+                                                    disabled={status === 'loading' || status === 'success'}
+                                                >
+                                                    <FileClock className="w-4 h-4" />
+                                                    {t('accounts.add.import.btn_v1')}
                                                 </button>
                                             </div>
                                         </div>
-                                    </div>
-                                </div>
+                                    )}
+                                </>
                             )}
 
-                            {/* Refresh Token */}
-                            {activeTab === 'token' && (
-                                <div className="space-y-4 py-2">
-                                    <div className="bg-gray-50 dark:bg-base-200 p-4 rounded-lg border border-gray-200 dark:border-base-300">
-                                        <div className="flex justify-between items-center mb-2">
-                                            <span className="text-sm font-medium text-gray-500 dark:text-gray-400">{t('accounts.add.token.label')}</span>
+                            {selectedProvider === 'codex' && (
+                                <>
+                                    {/* Codex OAuth */}
+                                    {codexActiveTab === 'oauth' && (
+                                        <div className="space-y-6 py-4">
+                                            <div className="text-center space-y-3">
+                                                <div className="bg-green-50 dark:bg-green-900/20 p-6 rounded-full w-20 h-20 mx-auto flex items-center justify-center">
+                                                    <Globe className="w-10 h-10 text-green-500" />
+                                                </div>
+                                                <div className="space-y-1">
+                                                    <h4 className="font-medium text-gray-900 dark:text-gray-100">{t('accounts.add.codex_oauth')}</h4>
+                                                    <p className="text-sm text-gray-500 dark:text-gray-400 max-w-xs mx-auto">
+                                                        {t('accounts.add.codex_oauth_desc')}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                            <button
+                                                className="w-full px-4 py-3 bg-green-600 hover:bg-green-700 text-white font-medium rounded-xl shadow-lg shadow-green-500/20 transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                                                onClick={handleCodexOAuth}
+                                                disabled={status === 'loading' || status === 'success'}
+                                            >
+                                                {status === 'loading' ? t('accounts.add.oauth.btn_waiting') : t('accounts.add.codex_oauth')}
+                                            </button>
                                         </div>
-                                        <textarea
-                                            className="textarea textarea-bordered w-full h-32 font-mono text-xs leading-relaxed focus:outline-none focus:border-blue-500 transition-colors bg-white dark:bg-base-100 text-gray-900 dark:text-base-content border-gray-300 dark:border-base-300 placeholder:text-gray-400"
-                                            placeholder={t('accounts.add.token.placeholder')}
-                                            value={refreshToken}
-                                            onChange={(e) => setRefreshToken(e.target.value)}
-                                            disabled={status === 'loading' || status === 'success'}
-                                        />
-                                        <p className="text-[10px] text-gray-400 mt-2">
-                                            {t('accounts.add.token.hint')}
-                                        </p>
-                                    </div>
-                                </div>
-                            )}
+                                    )}
 
-                            {/* 从数据库导入 */}
-                            {activeTab === 'import' && (
-                                <div className="space-y-6 py-2">
-                                    <div className="space-y-2">
-                                        <h4 className="font-semibold flex items-center gap-2 text-gray-800 dark:text-gray-200">
-                                            <Database className="w-4 h-4 text-gray-600 dark:text-gray-400" />
-                                            {t('accounts.add.import.scheme_a')}
-                                        </h4>
-                                        <p className="text-xs text-gray-500 dark:text-gray-400">
-                                            {t('accounts.add.import.scheme_a_desc')}
-                                        </p>
-                                        <button
-                                            className="w-full px-4 py-3 bg-gray-50 dark:bg-base-200 text-gray-700 dark:text-gray-300 font-medium rounded-xl border border-gray-200 dark:border-base-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:border-blue-200 dark:hover:border-blue-800 hover:text-blue-600 dark:hover:text-blue-400 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed mb-2 shadow-sm"
-                                            onClick={handleImportDb}
-                                            disabled={status === 'loading' || status === 'success'}
-                                        >
-                                            <CheckCircle2 className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
-                                            {t('accounts.add.import.btn_db')}
-                                        </button>
-                                        <button
-                                            className="w-full px-4 py-3 bg-gray-50 dark:bg-base-200 text-gray-700 dark:text-gray-300 font-medium rounded-xl border border-gray-200 dark:border-base-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 hover:border-indigo-200 dark:hover:border-indigo-800 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-                                            onClick={handleImportCustomDb}
-                                            disabled={status === 'loading' || status === 'success'}
-                                        >
-                                            <Database className="w-4 h-4" />
-                                            {t('accounts.add.import.btn_custom_db') || 'Custom DB (state.vscdb)'}
-                                        </button>
-                                    </div>
+                                    {/* Codex Manual Token */}
+                                    {codexActiveTab === 'token' && (
+                                        <div className="space-y-4 py-2">
+                                            <div className="bg-gray-50 dark:bg-base-200 p-4 rounded-lg border border-gray-200 dark:border-base-300">
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <span className="text-sm font-medium text-gray-500 dark:text-gray-400">{t('accounts.add.codex_token')}</span>
+                                                </div>
+                                                <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                                                    {t('accounts.add.codex_token_desc')}
+                                                </p>
+                                                <input
+                                                    type="text"
+                                                    className="w-full text-xs py-2 px-3 bg-white dark:bg-base-100 border border-gray-200 dark:border-base-300 rounded-xl focus:ring-2 focus:ring-green-500/20 focus:border-green-500 outline-none transition-all placeholder:text-gray-400 font-mono mb-2"
+                                                    placeholder={t('accounts.add.codex_token_placeholder')}
+                                                    value={codexToken}
+                                                    onChange={(e) => setCodexToken(e.target.value)}
+                                                    disabled={status === 'loading' || status === 'success'}
+                                                />
+                                                <input
+                                                    type="text"
+                                                    className="w-full text-xs py-2 px-3 bg-white dark:bg-base-100 border border-gray-200 dark:border-base-300 rounded-xl focus:ring-2 focus:ring-green-500/20 focus:border-green-500 outline-none transition-all placeholder:text-gray-400 font-mono"
+                                                    placeholder={t('accounts.add.codex_refresh_token_placeholder')}
+                                                    value={codexRefreshToken}
+                                                    onChange={(e) => setCodexRefreshToken(e.target.value)}
+                                                    disabled={status === 'loading' || status === 'success'}
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
 
-                                    <div className="divider text-xs text-gray-300 dark:text-gray-600">{t('accounts.add.import.or')}</div>
-
-                                    <div className="space-y-2">
-                                        <h4 className="font-semibold flex items-center gap-2 text-gray-800 dark:text-gray-200">
-                                            <FileClock className="w-4 h-4 text-gray-600 dark:text-gray-400" />
-                                            {t('accounts.add.import.scheme_b')}
-                                        </h4>
-                                        <p className="text-xs text-gray-500 dark:text-gray-400">
-                                            {t('accounts.add.import.scheme_b_desc')}
-                                        </p>
-                                        <button
-                                            className="w-full px-4 py-3 bg-gray-50 dark:bg-base-200 text-gray-700 dark:text-gray-300 font-medium rounded-xl border border-gray-200 dark:border-base-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 hover:border-emerald-200 dark:hover:border-emerald-800 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-                                            onClick={handleImportV1}
-                                            disabled={status === 'loading' || status === 'success'}
-                                        >
-                                            <FileClock className="w-4 h-4" />
-                                            {t('accounts.add.import.btn_v1')}
-                                        </button>
-                                    </div>
-                                </div>
+                                    {/* Codex Import from File */}
+                                    {codexActiveTab === 'import' && (
+                                        <div className="space-y-6 py-4">
+                                            <div className="text-center space-y-3">
+                                                <div className="bg-green-50 dark:bg-green-900/20 p-6 rounded-full w-20 h-20 mx-auto flex items-center justify-center">
+                                                    <Database className="w-10 h-10 text-green-500" />
+                                                </div>
+                                                <div className="space-y-1">
+                                                    <h4 className="font-medium text-gray-900 dark:text-gray-100">{t('accounts.add.codex_import')}</h4>
+                                                    <p className="text-sm text-gray-500 dark:text-gray-400 max-w-xs mx-auto">
+                                                        {t('accounts.add.codex_import_desc')}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                            <button
+                                                className="w-full px-4 py-3 bg-gray-50 dark:bg-base-200 text-gray-700 dark:text-gray-300 font-medium rounded-xl border border-gray-200 dark:border-base-300 hover:bg-green-50 dark:hover:bg-green-900/20 hover:border-green-200 dark:hover:border-green-800 hover:text-green-600 dark:hover:text-green-400 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                                                onClick={handleCodexImport}
+                                                disabled={status === 'loading' || status === 'success'}
+                                            >
+                                                <Database className="w-4 h-4" />
+                                                {t('accounts.add.codex_import_btn')}
+                                            </button>
+                                        </div>
+                                    )}
+                                </>
                             )}
                         </div>
 
@@ -702,10 +865,20 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
                             >
                                 {t('accounts.add.btn_cancel')}
                             </button>
-                            {activeTab === 'token' && (
+                            {selectedProvider === 'google' && activeTab === 'token' && (
                                 <button
                                     className="flex-1 px-4 py-2.5 text-white font-medium rounded-xl shadow-md transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 bg-blue-500 hover:bg-blue-600 focus:ring-blue-500 shadow-blue-100 dark:shadow-blue-900/30 flex justify-center items-center gap-2"
                                     onClick={handleSubmit}
+                                    disabled={status === 'loading' || status === 'success'}
+                                >
+                                    {status === 'loading' ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                                    {t('accounts.add.btn_confirm')}
+                                </button>
+                            )}
+                            {selectedProvider === 'codex' && codexActiveTab === 'token' && (
+                                <button
+                                    className="flex-1 px-4 py-2.5 text-white font-medium rounded-xl shadow-md transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 bg-green-500 hover:bg-green-600 focus:ring-green-500 shadow-green-100 dark:shadow-green-900/30 flex justify-center items-center gap-2"
+                                    onClick={handleCodexTokenSubmit}
                                     disabled={status === 'loading' || status === 'success'}
                                 >
                                     {status === 'loading' ? <Loader2 className="w-4 h-4 animate-spin" /> : null}

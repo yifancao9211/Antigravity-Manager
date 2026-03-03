@@ -333,7 +333,16 @@ pub async fn get_valid_token_for_warmup(account: &crate::models::account::Accoun
     let mut account = account.clone();
     
     // Check and auto-refresh token
-    let new_token = crate::modules::oauth::ensure_fresh_token(&account.token, Some(&account.id)).await?;
+    let new_token = match account.provider {
+        crate::models::AccountProvider::Codex => {
+            crate::modules::codex_oauth::ensure_codex_fresh_token(&account.token)
+                .await?
+                .unwrap_or_else(|| account.token.clone())
+        }
+        crate::models::AccountProvider::Google => {
+            crate::modules::oauth::ensure_fresh_token(&account.token, Some(&account.id)).await?
+        }
+    };
     
     // If token changed (meant refreshed), save it
     if new_token.access_token != account.token.access_token {

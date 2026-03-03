@@ -2,6 +2,7 @@
 use std::collections::HashMap;
 use once_cell::sync::Lazy;
 use dashmap::DashMap;
+use crate::models::AccountProvider;
 
 // 动态官方废弃模型转发表 (old_model_id -> new_model_id)
 pub static DYNAMIC_MODEL_FORWARDING_RULES: Lazy<DashMap<String, String>> = Lazy::new(|| DashMap::new());
@@ -329,6 +330,36 @@ pub fn normalize_to_standard_id(model_name: &str) -> Option<String> {
         return Some("claude".to_string());
     }
 
+    None
+}
+
+/// Determine the preferred provider for a given model name.
+/// Returns `Some(provider)` if the model has a clear affinity,
+/// or `None` if any provider can serve it.
+pub fn preferred_provider_for_model(model: &str) -> Option<AccountProvider> {
+    let lower = model.to_lowercase();
+
+    // OpenAI models prefer Codex accounts
+    if lower.starts_with("gpt-")
+        || lower.starts_with("o1-")
+        || lower.starts_with("o3-")
+        || lower.starts_with("o4-")
+        || lower.starts_with("chatgpt-")
+        || lower == "gpt-4o"
+        || lower == "gpt-4o-mini"
+    {
+        return Some(AccountProvider::Codex);
+    }
+
+    // Google/Anthropic models prefer Google accounts
+    if lower.starts_with("claude-")
+        || lower.starts_with("gemini-")
+        || lower.starts_with("gemma-")
+    {
+        return Some(AccountProvider::Google);
+    }
+
+    // Unknown models — no preference, use any available account
     None
 }
 

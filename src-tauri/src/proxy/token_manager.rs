@@ -26,6 +26,7 @@ pub struct ProxyToken {
     pub email: String,
     pub account_path: PathBuf, // 账号文件路径，用于更新
     pub project_id: Option<String>,
+    pub provider: crate::models::AccountProvider,
     pub subscription_tier: Option<String>, // "FREE" | "PRO" | "ULTRA"
     pub remaining_quota: Option<i32>,      // [FIX #563] Remaining quota for priority sorting
     pub protected_models: HashSet<String>, // [NEW #621]
@@ -519,6 +520,15 @@ impl TokenManager {
             }
         }
 
+        let provider = account
+            .get("provider")
+            .and_then(|v| v.as_str())
+            .and_then(|s| match s {
+                "codex" => Some(crate::models::AccountProvider::Codex),
+                _ => Some(crate::models::AccountProvider::Google),
+            })
+            .unwrap_or(crate::models::AccountProvider::Google);
+
         Ok(Some(ProxyToken {
             account_id,
             access_token,
@@ -528,6 +538,7 @@ impl TokenManager {
             email,
             account_path: path.clone(),
             project_id,
+            provider,
             subscription_tier,
             remaining_quota,
             protected_models,
@@ -1199,26 +1210,58 @@ impl TokenManager {
                     let now = chrono::Utc::now().timestamp();
                     if now >= token.timestamp - 300 {
                         tracing::debug!("账号 {} 的 token 即将过期，正在刷新...", token.email);
-                        match crate::modules::oauth::refresh_access_token(&token.refresh_token, Some(&token.account_id))
-                            .await
-                        {
-                            Ok(token_response) => {
-                                token.access_token = token_response.access_token.clone();
-                                token.expires_in = token_response.expires_in;
-                                token.timestamp = now + token_response.expires_in;
-
-                                if let Some(mut entry) = self.tokens.get_mut(&token.account_id) {
-                                    entry.access_token = token.access_token.clone();
-                                    entry.expires_in = token.expires_in;
-                                    entry.timestamp = token.timestamp;
+                        match token.provider {
+                            crate::models::AccountProvider::Codex => {
+                                // Build a temporary TokenData to pass to the Codex refresher
+                                let temp_token_data = crate::models::TokenData::new(
+                                    token.access_token.clone(),
+                                    token.refresh_token.clone(),
+                                    token.expires_in,
+                                    None,
+                                    token.project_id.clone(),
+                                    None,
+                                );
+                                match crate::modules::codex_oauth::ensure_codex_fresh_token(&temp_token_data).await {
+                                    Ok(Some(new_token_data)) => {
+                                        token.access_token = new_token_data.access_token.clone();
+                                        token.expires_in = new_token_data.expires_in;
+                                        token.timestamp = new_token_data.expiry_timestamp;
+                                        if let Some(mut entry) = self.tokens.get_mut(&token.account_id) {
+                                            entry.access_token = token.access_token.clone();
+                                            entry.expires_in = token.expires_in;
+                                            entry.timestamp = token.timestamp;
+                                        }
+                                        let _ = self.save_codex_refreshed_token(&token.account_id, &new_token_data).await;
+                                    }
+                                    Ok(None) => {} // still fresh, no-op
+                                    Err(e) => {
+                                        tracing::warn!("Preferred Codex account token refresh failed: {}", e);
+                                    }
                                 }
-                                let _ = self
-                                    .save_refreshed_token(&token.account_id, &token_response)
-                                    .await;
                             }
-                            Err(e) => {
-                                tracing::warn!("Preferred account token refresh failed: {}", e);
-                                // 继续使用旧 token，让后续逻辑处理失败
+                            crate::models::AccountProvider::Google => {
+                                match crate::modules::oauth::refresh_access_token(&token.refresh_token, Some(&token.account_id))
+                                    .await
+                                {
+                                    Ok(token_response) => {
+                                        token.access_token = token_response.access_token.clone();
+                                        token.expires_in = token_response.expires_in;
+                                        token.timestamp = now + token_response.expires_in;
+
+                                        if let Some(mut entry) = self.tokens.get_mut(&token.account_id) {
+                                            entry.access_token = token.access_token.clone();
+                                            entry.expires_in = token.expires_in;
+                                            entry.timestamp = token.timestamp;
+                                        }
+                                        let _ = self
+                                            .save_refreshed_token(&token.account_id, &token_response)
+                                            .await;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("Preferred account token refresh failed: {}", e);
+                                        // 继续使用旧 token，让后续逻辑处理失败
+                                    }
+                                }
                             }
                         }
                     }
@@ -1535,29 +1578,60 @@ impl TokenManager {
             if now >= token.timestamp - 300 {
                 tracing::debug!("账号 {} 的 token 即将过期，正在刷新...", token.email);
 
-                // 调用 OAuth 刷新 token
-                match crate::modules::oauth::refresh_access_token(&token.refresh_token, Some(&token.account_id)).await {
-                    Ok(token_response) => {
+                // 调用 OAuth 刷新 token（根据 provider 路由）
+                let refresh_result: Result<(String, i64, i64), String> = match token.provider {
+                    crate::models::AccountProvider::Codex => {
+                        let temp_token_data = crate::models::TokenData::new(
+                            token.access_token.clone(),
+                            token.refresh_token.clone(),
+                            token.expires_in,
+                            None,
+                            token.project_id.clone(),
+                            None,
+                        );
+                        match crate::modules::codex_oauth::ensure_codex_fresh_token(&temp_token_data).await {
+                            Ok(Some(new_td)) => {
+                                let new_ts = new_td.expiry_timestamp;
+                                let new_exp = new_ts - now;
+                                let new_at = new_td.access_token.clone();
+                                let _ = self.save_codex_refreshed_token(&token.account_id, &new_td).await;
+                                Ok((new_at, new_exp, new_ts))
+                            }
+                            Ok(None) => Ok((token.access_token.clone(), token.expires_in, token.timestamp)),
+                            Err(e) => Err(e),
+                        }
+                    }
+                    crate::models::AccountProvider::Google => {
+                        match crate::modules::oauth::refresh_access_token(&token.refresh_token, Some(&token.account_id)).await {
+                            Ok(token_response) => {
+                                let new_ts = now + token_response.expires_in;
+                                let new_at = token_response.access_token.clone();
+                                let new_exp = token_response.expires_in;
+                                // 同步落盘
+                                if let Err(e) = self.save_refreshed_token(&token.account_id, &token_response).await {
+                                    tracing::debug!("保存刷新后的 token 失败 ({}): {}", token.email, e);
+                                }
+                                Ok((new_at, new_exp, new_ts))
+                            }
+                            Err(e) => Err(e),
+                        }
+                    }
+                };
+
+                match refresh_result {
+                    Ok((new_access_token, new_expires_in, new_timestamp)) => {
                         tracing::debug!("Token 刷新成功！");
 
                         // 更新本地内存对象供后续使用
-                        token.access_token = token_response.access_token.clone();
-                        token.expires_in = token_response.expires_in;
-                        token.timestamp = now + token_response.expires_in;
+                        token.access_token = new_access_token;
+                        token.expires_in = new_expires_in;
+                        token.timestamp = new_timestamp;
 
                         // 同步更新跨线程共享的 DashMap
                         if let Some(mut entry) = self.tokens.get_mut(&token.account_id) {
                             entry.access_token = token.access_token.clone();
                             entry.expires_in = token.expires_in;
                             entry.timestamp = token.timestamp;
-                        }
-
-                        // 同步落盘（避免重启后继续使用过期 timestamp 导致频繁刷新）
-                        if let Err(e) = self
-                            .save_refreshed_token(&token.account_id, &token_response)
-                            .await
-                        {
-                            tracing::debug!("保存刷新后的 token 失败 ({}): {}", token.email, e);
                         }
                     }
                     Err(e) => {
@@ -1714,6 +1788,29 @@ impl TokenManager {
         Ok(())
     }
 
+    /// Save a refreshed Codex TokenData to disk (mirrors save_refreshed_token for Codex accounts)
+    async fn save_codex_refreshed_token(&self, account_id: &str, token_data: &crate::models::TokenData) -> Result<(), String> {
+        let entry = self.tokens.get(account_id)
+            .ok_or("账号不存在")?;
+
+        let path = &entry.account_path;
+
+        let mut content: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(path).map_err(|e| format!("读取文件失败: {}", e))?
+        ).map_err(|e| format!("解析 JSON 失败: {}", e))?;
+
+        content["token"]["access_token"] = serde_json::Value::String(token_data.access_token.clone());
+        content["token"]["refresh_token"] = serde_json::Value::String(token_data.refresh_token.clone());
+        content["token"]["expires_in"] = serde_json::Value::Number(token_data.expires_in.into());
+        content["token"]["expiry_timestamp"] = serde_json::Value::Number(token_data.expiry_timestamp.into());
+
+        std::fs::write(path, serde_json::to_string_pretty(&content).unwrap())
+            .map_err(|e| format!("写入文件失败: {}", e))?;
+
+        tracing::debug!("已保存刷新后的 Codex token 到账号 {}", account_id);
+        Ok(())
+    }
+
     pub fn len(&self) -> usize {
         self.tokens.len()
     }
@@ -1738,6 +1835,7 @@ impl TokenManager {
                         token.expires_in,
                         chrono::Utc::now().timestamp(),
                         token.project_id.clone(),
+                        token.provider.clone(),
                     ));
                     break;
                 }
@@ -1753,6 +1851,7 @@ impl TokenManager {
             expires_in,
             now,
             project_id_opt,
+            provider,
         ) = match token_info {
             Some(info) => info,
             None => return Err(format!("未找到账号: {}", email)),
@@ -1769,35 +1868,67 @@ impl TokenManager {
 
         tracing::info!("[Warmup] Token for {} is expiring, refreshing...", email);
 
-        // 调用 OAuth 刷新 token
-        match crate::modules::oauth::refresh_access_token(&refresh_token, Some(&account_id)).await {
-            Ok(token_response) => {
-                tracing::info!("[Warmup] Token refresh successful for {}", email);
-                let new_now = chrono::Utc::now().timestamp();
-
-                // 更新缓存
-                if let Some(mut entry) = self.tokens.get_mut(&account_id) {
-                    entry.access_token = token_response.access_token.clone();
-                    entry.expires_in = token_response.expires_in;
-                    entry.timestamp = new_now;
+        // 调用 OAuth 刷新 token（根据 provider 路由）
+        match provider {
+            crate::models::AccountProvider::Codex => {
+                let temp_token_data = crate::models::TokenData::new(
+                    current_access_token,
+                    refresh_token,
+                    expires_in,
+                    None,
+                    Some(project_id.clone()),
+                    None,
+                );
+                match crate::modules::codex_oauth::ensure_codex_fresh_token(&temp_token_data).await {
+                    Ok(Some(new_td)) => {
+                        tracing::info!("[Warmup] Codex token refresh successful for {}", email);
+                        let new_ts = new_td.expiry_timestamp;
+                        let new_exp = new_ts - now;
+                        let new_at = new_td.access_token.clone();
+                        if let Some(mut entry) = self.tokens.get_mut(&account_id) {
+                            entry.access_token = new_at.clone();
+                            entry.expires_in = new_exp;
+                            entry.timestamp = new_ts;
+                        }
+                        let _ = self.save_codex_refreshed_token(&account_id, &new_td).await;
+                        Ok((new_at, project_id, email.to_string(), account_id, 0))
+                    }
+                    Ok(None) => {
+                        // still fresh
+                        Ok((temp_token_data.access_token, project_id, email.to_string(), account_id, 0))
+                    }
+                    Err(e) => Err(format!("[Warmup] Codex token refresh failed for {}: {}", email, e)),
                 }
-
-                // 保存到磁盘
-                let _ = self
-                    .save_refreshed_token(&account_id, &token_response)
-                    .await;
-
-                Ok((
-                    token_response.access_token,
-                    project_id,
-                    email.to_string(),
-                    account_id,
-                    0,
-                ))
             }
-            Err(e) => Err(format!(
-                "[Warmup] Token refresh failed for {}: {}",
-                email, e
+            crate::models::AccountProvider::Google => {
+                match crate::modules::oauth::refresh_access_token(&refresh_token, Some(&account_id)).await {
+                    Ok(token_response) => {
+                        tracing::info!("[Warmup] Token refresh successful for {}", email);
+                        let new_now = chrono::Utc::now().timestamp();
+
+                        // 更新缓存
+                        if let Some(mut entry) = self.tokens.get_mut(&account_id) {
+                            entry.access_token = token_response.access_token.clone();
+                            entry.expires_in = token_response.expires_in;
+                            entry.timestamp = new_now;
+                        }
+
+                        // 保存到磁盘
+                        let _ = self
+                            .save_refreshed_token(&account_id, &token_response)
+                            .await;
+
+                        Ok((
+                            token_response.access_token,
+                            project_id,
+                            email.to_string(),
+                            account_id,
+                            0,
+                        ))
+                    }
+                    Err(e) => Err(format!(
+                        "[Warmup] Token refresh failed for {}: {}",
+                        email, e
             )),
         }
     }
@@ -2751,7 +2882,10 @@ mod tests {
             reset_time,
             validation_blocked: false,
             validation_blocked_until: 0,
+            validation_url: None,
             model_quotas: HashMap::new(),
+            model_limits: HashMap::new(),
+            provider: crate::models::AccountProvider::Google,
         }
     }
 
@@ -3007,7 +3141,10 @@ mod tests {
             reset_time: None,
             validation_blocked: false,
             validation_blocked_until: 0,
+            validation_url: None,
             model_quotas: HashMap::new(),
+            model_limits: HashMap::new(),
+            provider: crate::models::AccountProvider::Google,
         }
     }
 

@@ -1,7 +1,7 @@
 use axum::http::HeaderMap;
 use once_cell::sync::Lazy;
 use std::sync::Arc; // [NEW] Import Arc
-use super::client_adapters::OpencodeAdapter;
+use super::client_adapters::{OpencodeAdapter, CodexAdapter};
 
 /// 客户端适配器 trait
 /// 
@@ -88,6 +88,7 @@ pub enum Protocol {
 pub static CLIENT_ADAPTERS: Lazy<Vec<Arc<dyn ClientAdapter>>> = Lazy::new(|| {
     vec![
         Arc::new(OpencodeAdapter),
+        Arc::new(CodexAdapter),
         // 未来可以轻松添加更多适配器:
         // Arc::new(CherryStudioAdapter),
     ]

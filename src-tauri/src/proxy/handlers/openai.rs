@@ -208,6 +208,12 @@ pub async fn handle_chat_completions(
         // [NEW v4.1.28] 获取完整 Token 对象用于动态规格查询
         let proxy_token = token_manager.get_token_by_id(&account_id);
 
+        // [NEW] Determine account provider for upstream routing
+        let account_provider = proxy_token
+            .as_ref()
+            .map(|t| t.provider.clone())
+            .unwrap_or(crate::models::AccountProvider::Google);
+
         last_email = Some(email.clone());
         info!("✓ Using account: {} (type: {})", email, config.request_type);
 
@@ -272,27 +278,70 @@ pub async fn handle_chat_completions(
             );
         }
 
-        let call_result = match upstream
-            .call_v1_internal_with_headers(
-                method,
-                &access_token,
-                gemini_body,
-                query_string,
-                extra_headers.clone(),
-                Some(account_id.as_str()),
-            )
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                last_error = e.clone();
-                debug!(
-                    "OpenAI Request failed on attempt {}/{}: {}",
-                    attempt + 1,
-                    max_attempts,
-                    e
-                );
-                continue;
+        // [NEW] Branch upstream routing by account provider
+        let call_result = match account_provider {
+            crate::models::AccountProvider::Codex => {
+                // Codex accounts: send original OpenAI-format body directly to api.openai.com
+                // Ensure token is fresh before sending
+                let fresh_access_token = if let Some(ref pt) = proxy_token {
+                    let temp_td = crate::models::TokenData::new(
+                        pt.access_token.clone(),
+                        pt.refresh_token.clone(),
+                        pt.expires_in,
+                        None,
+                        None,
+                        None,
+                    );
+                    match crate::modules::codex_oauth::ensure_codex_fresh_token(&temp_td).await {
+                        Ok(Some(new_td)) => new_td.access_token,
+                        _ => access_token.clone(),
+                    }
+                } else {
+                    access_token.clone()
+                };
+                let openai_body = serde_json::to_value(&openai_req)
+                    .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
+                match upstream
+                    .call_openai_direct(&fresh_access_token, openai_body, Some(account_id.as_str()))
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        last_error = e.clone();
+                        debug!(
+                            "OpenAI (Codex) Request failed on attempt {}/{}: {}",
+                            attempt + 1,
+                            max_attempts,
+                            e
+                        );
+                        continue;
+                    }
+                }
+            }
+            crate::models::AccountProvider::Google => {
+                match upstream
+                    .call_v1_internal_with_headers(
+                        method,
+                        &access_token,
+                        gemini_body,
+                        query_string,
+                        extra_headers.clone(),
+                        Some(account_id.as_str()),
+                    )
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        last_error = e.clone();
+                        debug!(
+                            "OpenAI Request failed on attempt {}/{}: {}",
+                            attempt + 1,
+                            max_attempts,
+                            e
+                        );
+                        continue;
+                    }
+                }
             }
         };
 

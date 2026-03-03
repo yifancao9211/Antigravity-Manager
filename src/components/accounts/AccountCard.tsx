@@ -26,6 +26,18 @@ interface AccountCardProps {
     onViewError: () => void;
 }
 
+function ProviderBadge({ provider }: { provider?: string }) {
+    const isCodex = provider === 'codex';
+    return (
+        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
+            isCodex ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                    : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+        }`}>
+            {isCodex ? 'Codex' : 'Google'}
+        </span>
+    );
+}
+
 // 使用统一的模型配置
 const DEFAULT_MODELS = Object.entries(MODEL_CONFIG).map(([id, config]) => ({
     id,
@@ -203,6 +215,8 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
                                     {account.custom_label}
                                 </span>
                             )}
+                            {/* 提供商徽章 */}
+                            <ProviderBadge provider={account.provider} />
                         </div>
                         <span className="text-[10px] text-gray-400 dark:text-gray-500 font-mono shrink-0 whitespace-nowrap">
                             {new Date(account.last_used * 1000).toLocaleString([], { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
@@ -214,7 +228,14 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
 
             {/* 配额展示 */}
             <div className="flex-1 px-2 mb-2 overflow-y-auto scrollbar-none">
-                {isDisabled || account.quota?.is_forbidden || account.proxy_disabled || account.validation_blocked ? (
+                {account.provider === 'codex' ? (
+                    <div className="flex items-center justify-center h-full py-4">
+                        <span className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 text-[11px] font-bold border border-emerald-200 dark:border-emerald-800/50">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                            Codex - Active
+                        </span>
+                    </div>
+                ) : isDisabled || account.quota?.is_forbidden || account.proxy_disabled || account.validation_blocked ? (
                     <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 h-full py-4 text-center">
                         <div className={cn(
                             "flex items-center gap-1.5",

@@ -6,6 +6,7 @@ pub mod db;
 pub mod process;
 pub mod oauth;
 pub mod oauth_server;
+pub mod codex_oauth;
 pub mod migration;
 pub mod tray;
 pub mod i18n;

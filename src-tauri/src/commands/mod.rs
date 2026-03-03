@@ -194,6 +194,22 @@ pub async fn fetch_account_quota(
     let mut account =
         modules::load_account(&account_id).map_err(crate::error::AppError::Account)?;
 
+    // Codex accounts don't use Google's quota API — return a simple active status
+    if account.provider == crate::models::AccountProvider::Codex {
+        let quota = QuotaData {
+            models: vec![],
+            last_updated: chrono::Utc::now().timestamp(),
+            is_forbidden: false,
+            forbidden_reason: None,
+            subscription_tier: Some("Codex".to_string()),
+            model_forwarding_rules: std::collections::HashMap::new(),
+        };
+        modules::update_account_quota(&account_id, quota.clone())
+            .map_err(crate::error::AppError::Account)?;
+        crate::modules::tray::update_tray_menus(&app);
+        return Ok(quota);
+    }
+
     // 使用带重试的查询 (Shared logic)
     let quota = modules::account::fetch_quota_with_retry(&mut account).await?;
 
@@ -457,6 +473,182 @@ pub async fn cancel_oauth_login() -> Result<(), String> {
 pub async fn submit_oauth_code(code: String, state: Option<String>) -> Result<(), String> {
     modules::logger::log_info("收到手动提交 OAuth Code 请求");
     modules::oauth_server::submit_oauth_code(code, state).await
+}
+
+// --- Codex 账号命令 ---
+
+/// Add a Codex account via manual token/API key input
+#[tauri::command]
+pub async fn add_codex_account_manual(
+    _app: tauri::AppHandle,
+    proxy_state: tauri::State<'_, crate::commands::proxy::ProxyServiceState>,
+    token: String,
+    refresh_token: Option<String>,
+) -> Result<crate::models::Account, String> {
+    use crate::models::Account;
+    use crate::modules::codex_oauth;
+
+    let is_api_key = token.starts_with("sk-");
+
+    let token_data = if is_api_key {
+        codex_oauth::build_codex_api_key_token_data(token.clone(), None)
+    } else {
+        crate::models::TokenData::new(
+            token.clone(),
+            refresh_token.unwrap_or_default(),
+            3600,
+            None,
+            None,
+            None,
+        )
+    };
+
+    // Try to get user info for display name
+    let email = match codex_oauth::get_codex_user_info(&token_data.access_token).await {
+        Ok(info) => info.email.unwrap_or_else(|| "codex-user".to_string()),
+        Err(e) => {
+            tracing::warn!("Failed to get Codex user info: {}, using placeholder", e);
+            if is_api_key { "codex-api-key".to_string() } else { "codex-user".to_string() }
+        }
+    };
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let account = Account::new_codex(id, email, token_data);
+    let account = modules::account::add_account_raw(account)?;
+
+    // Reload proxy pool if running
+    let _ = crate::commands::proxy::reload_proxy_accounts(proxy_state).await;
+
+    Ok(account)
+}
+
+/// Import Codex account from ~/.codex/auth.json
+#[tauri::command]
+pub async fn import_codex_from_file(
+    _app: tauri::AppHandle,
+    proxy_state: tauri::State<'_, crate::commands::proxy::ProxyServiceState>,
+) -> Result<crate::models::Account, String> {
+    use crate::models::Account;
+    use crate::modules::codex_oauth;
+
+    let token_data = codex_oauth::import_from_codex_auth_file().await?;
+
+    // Try to get user info
+    let email = match codex_oauth::get_codex_user_info(&token_data.access_token).await {
+        Ok(info) => info.email.unwrap_or_else(|| "codex-user".to_string()),
+        Err(e) => {
+            tracing::warn!("Failed to get Codex user info from file import: {}", e);
+            "codex-file-import".to_string()
+        }
+    };
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let account = Account::new_codex(id, email, token_data);
+    let account = modules::account::add_account_raw(account)?;
+
+    // Reload proxy pool
+    let _ = crate::commands::proxy::reload_proxy_accounts(proxy_state).await;
+
+    Ok(account)
+}
+
+/// Start Codex OAuth login flow (opens browser for OpenAI login)
+#[tauri::command]
+pub async fn start_codex_oauth_login(
+    app_handle: tauri::AppHandle,
+    proxy_state: tauri::State<'_, crate::commands::proxy::ProxyServiceState>,
+) -> Result<crate::models::Account, String> {
+    use crate::models::Account;
+    use crate::modules::codex_oauth;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tauri::Url;
+
+    // Bind local listener to receive OAuth callback
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| format!("Failed to bind OAuth callback listener: {}", e))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("Failed to get listener port: {}", e))?
+        .port();
+
+    let redirect_uri = format!("http://127.0.0.1:{}/oauth-callback", port);
+    let state_str = uuid::Uuid::new_v4().to_string();
+    let (auth_url, code_verifier) = codex_oauth::get_codex_auth_url(&redirect_uri, &state_str);
+
+    // Open browser for user to authenticate
+    use tauri_plugin_opener::OpenerExt;
+    app_handle
+        .opener()
+        .open_url(&auth_url, None::<&str>)
+        .map_err(|e| format!("Failed to open browser: {}", e))?;
+
+    // Wait for the OAuth callback
+    let (mut stream, _) = listener
+        .accept()
+        .await
+        .map_err(|e| format!("Failed to accept OAuth callback connection: {}", e))?;
+
+    let mut buffer = [0u8; 4096];
+    let bytes_read = stream.read(&mut buffer).await.unwrap_or(0);
+    let request = String::from_utf8_lossy(&buffer[..bytes_read]);
+
+    // Parse code and state from the callback request
+    let query_params = request
+        .lines()
+        .next()
+        .and_then(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 { Some(parts[1]) } else { None }
+        })
+        .and_then(|path| Url::parse(&format!("http://localhost{}", path)).ok())
+        .map(|url| {
+            let mut code = None;
+            let mut state = None;
+            for (k, v) in url.query_pairs() {
+                if k == "code" { code = Some(v.to_string()); }
+                else if k == "state" { state = Some(v.to_string()); }
+            }
+            (code, state)
+        });
+
+    let (code_opt, received_state) = query_params.unwrap_or((None, None));
+
+    // Verify state to prevent CSRF
+    if received_state.as_deref() != Some(&state_str) {
+        let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\nState mismatch").await;
+        return Err("OAuth state mismatch (CSRF protection)".to_string());
+    }
+
+    let code = code_opt.ok_or("No authorization code received in OAuth callback")?;
+
+    // Send success response to browser
+    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
+        <html><body style='font-family:sans-serif;text-align:center;padding:50px'>\
+        <h1 style='color:green'>Authorization Successful!</h1>\
+        <p>You can close this window and return to the application.</p>\
+        <script>setTimeout(function(){window.close();},2000);</script>\
+        </body></html>").await;
+
+    // Exchange the code for tokens
+    let token_resp = codex_oauth::exchange_codex_code(&code, &redirect_uri, &code_verifier).await?;
+
+    // Get user info
+    let email = match codex_oauth::get_codex_user_info(&token_resp.access_token).await {
+        Ok(info) => info.email.unwrap_or_else(|| "codex-user".to_string()),
+        Err(_) => "codex-oauth-user".to_string(),
+    };
+
+    let token_data = codex_oauth::build_codex_token_data(&token_resp, Some(email.clone()));
+    let id = uuid::Uuid::new_v4().to_string();
+    let account = Account::new_codex(id, email, token_data);
+    let account = modules::account::add_account_raw(account)?;
+
+    // Reload proxy pool
+    let _ = crate::commands::proxy::reload_proxy_accounts(proxy_state).await;
+
+    Ok(account)
 }
 
 // --- 导入命令 ---

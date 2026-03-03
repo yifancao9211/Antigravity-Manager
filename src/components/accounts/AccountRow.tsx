@@ -160,7 +160,12 @@ function AccountRow({ account, selected, onSelect, isCurrent, isRefreshing, isSw
 
             {/* 模型配额 */}
             <td className="px-4 py-1">
-                {account.quota?.is_forbidden ? (
+                {account.provider === 'codex' ? (
+                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 text-xs font-bold border border-emerald-200 dark:border-emerald-800/50 w-fit">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                        Codex - Active
+                    </div>
+                ) : account.quota?.is_forbidden ? (
                     <div className="flex items-center gap-2 text-xs text-red-500 dark:text-red-400 bg-red-50/50 dark:bg-red-900/10 p-1.5 rounded-lg border border-red-100 dark:border-red-900/30">
                         <Ban className="w-4 h-4 shrink-0" />
                         <span>{t('accounts.forbidden_msg')}</span>

@@ -743,6 +743,41 @@ pub fn add_account(
     Ok(account)
 }
 
+/// Save a pre-built Account to disk and register it in the index.
+/// Unlike `add_account`, this accepts an already-constructed Account (any provider)
+/// and does not create a new ID.
+pub fn add_account_raw(account: Account) -> Result<Account, String> {
+    let _lock = ACCOUNT_INDEX_LOCK
+        .lock()
+        .map_err(|e| format!("failed_to_acquire_lock: {}", e))?;
+
+    save_account(&account)?;
+
+    let mut index = load_account_index()?;
+
+    // Skip if already registered (idempotent)
+    if !index.accounts.iter().any(|s| s.id == account.id) {
+        index.accounts.push(crate::models::AccountSummary {
+            id: account.id.clone(),
+            email: account.email.clone(),
+            name: account.name.clone(),
+            disabled: account.disabled,
+            proxy_disabled: account.proxy_disabled,
+            protected_models: account.protected_models.clone(),
+            created_at: account.created_at,
+            last_used: account.last_used,
+        });
+
+        if index.current_account_id.is_none() {
+            index.current_account_id = Some(account.id.clone());
+        }
+
+        save_account_index(&index)?;
+    }
+
+    Ok(account)
+}
+
 /// Add or update account
 pub fn upsert_account(
     email: String,
@@ -959,9 +994,21 @@ pub async fn switch_account(
     ));
 
     // 2. Ensure Token is valid (auto-refresh)
-    let fresh_token = oauth::ensure_fresh_token(&account.token, Some(&account.id))
-        .await
-        .map_err(|e| format!("Token refresh failed: {}", e))?;
+    let fresh_token = match account.provider {
+        crate::models::AccountProvider::Codex => {
+            match crate::modules::codex_oauth::ensure_codex_fresh_token(&account.token).await
+                .map_err(|e| format!("Token refresh failed: {}", e))?
+            {
+                Some(new_token) => new_token,
+                None => account.token.clone(), // still fresh
+            }
+        }
+        crate::models::AccountProvider::Google => {
+            oauth::ensure_fresh_token(&account.token, Some(&account.id))
+                .await
+                .map_err(|e| format!("Token refresh failed: {}", e))?
+        }
+    };
 
     // If Token updated, save back to account file
     if fresh_token.access_token != account.token.access_token {
@@ -1411,7 +1458,16 @@ pub async fn fetch_quota_with_retry(account: &mut Account) -> crate::error::AppR
     use reqwest::StatusCode;
 
     // 1. Time-based check - ensure Token is valid first
-    let token = match oauth::ensure_fresh_token(&account.token, Some(&account.id)).await {
+    let token = match match account.provider {
+        crate::models::AccountProvider::Codex => {
+            crate::modules::codex_oauth::ensure_codex_fresh_token(&account.token)
+                .await
+                .map(|opt| opt.unwrap_or_else(|| account.token.clone()))
+        }
+        crate::models::AccountProvider::Google => {
+            oauth::ensure_fresh_token(&account.token, Some(&account.id)).await
+        }
+    } {
         Ok(t) => t,
         Err(e) => {
             if e.contains("invalid_grant") {
@@ -1509,40 +1565,69 @@ pub async fn fetch_quota_with_retry(account: &mut Account) -> crate::error::AppR
                 ));
 
                 // Force refresh
-                let token_res = match oauth::refresh_access_token(&account.token.refresh_token, Some(&account.id))
-                    .await
-                {
-                    Ok(t) => t,
-                    Err(e) => {
-                        if e.contains("invalid_grant") {
-                            modules::logger::log_error(&format!(
-                                "Disabling account {} due to invalid_grant during forced refresh (quota check)",
-                                account.email
-                            ));
-                            account.disabled = true;
-                            account.disabled_at = Some(chrono::Utc::now().timestamp());
-                            account.disabled_reason = Some(format!("invalid_grant: {}", e));
-                            let _ = save_account(account);
-                            crate::proxy::server::trigger_account_reload(&account.id);
+                let new_token = match account.provider {
+                    crate::models::AccountProvider::Codex => {
+                        match crate::modules::codex_oauth::refresh_codex_token(&account.token.refresh_token).await {
+                            Ok(resp) => TokenData::new(
+                                resp.access_token,
+                                resp.refresh_token.unwrap_or_else(|| account.token.refresh_token.clone()),
+                                resp.expires_in.unwrap_or(3600),
+                                account.token.email.clone(),
+                                account.token.project_id.clone(),
+                                None,
+                            ),
+                            Err(e) => {
+                                if e.contains("invalid_grant") {
+                                    modules::logger::log_error(&format!(
+                                        "Disabling account {} due to invalid_grant during forced refresh (quota check)",
+                                        account.email
+                                    ));
+                                    account.disabled = true;
+                                    account.disabled_at = Some(chrono::Utc::now().timestamp());
+                                    account.disabled_reason = Some(format!("invalid_grant: {}", e));
+                                    let _ = save_account(account);
+                                    crate::proxy::server::trigger_account_reload(&account.id);
+                                }
+                                return Err(AppError::OAuth(e));
+                            }
                         }
-                        return Err(AppError::OAuth(e));
+                    }
+                    crate::models::AccountProvider::Google => {
+                        let token_res = match oauth::refresh_access_token(&account.token.refresh_token, Some(&account.id))
+                            .await
+                        {
+                            Ok(t) => t,
+                            Err(e) => {
+                                if e.contains("invalid_grant") {
+                                    modules::logger::log_error(&format!(
+                                        "Disabling account {} due to invalid_grant during forced refresh (quota check)",
+                                        account.email
+                                    ));
+                                    account.disabled = true;
+                                    account.disabled_at = Some(chrono::Utc::now().timestamp());
+                                    account.disabled_reason = Some(format!("invalid_grant: {}", e));
+                                    let _ = save_account(account);
+                                    crate::proxy::server::trigger_account_reload(&account.id);
+                                }
+                                return Err(AppError::OAuth(e));
+                            }
+                        };
+                        TokenData::new(
+                            token_res.access_token.clone(),
+                            account.token.refresh_token.clone(),
+                            token_res.expires_in,
+                            account.token.email.clone(),
+                            account.token.project_id.clone(),
+                            None,
+                        )
                     }
                 };
-
-                let new_token = TokenData::new(
-                    token_res.access_token.clone(),
-                    account.token.refresh_token.clone(),
-                    token_res.expires_in,
-                    account.token.email.clone(),
-                    account.token.project_id.clone(), // Keep original project_id
-                    None,                             // Add None as session_id
-                );
 
                 // Re-fetch display name
                 let name = if account.name.is_none()
                     || account.name.as_ref().map_or(false, |n| n.trim().is_empty())
                 {
-                    match oauth::get_user_info(&token_res.access_token, Some(&account.id)).await {
+                    match oauth::get_user_info(&new_token.access_token, Some(&account.id)).await {
                         Ok(user_info) => user_info.get_display_name(),
                         Err(_) => None,
                     }

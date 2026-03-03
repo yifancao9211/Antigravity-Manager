@@ -120,6 +120,18 @@ interface AccountRowContentProps {
 // 辅助函数
 // ============================================================================
 
+function ProviderBadge({ provider }: { provider?: string }) {
+    const isCodex = provider === 'codex';
+    return (
+        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
+            isCodex ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                    : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+        }`}>
+            {isCodex ? 'Codex' : 'Google'}
+        </span>
+    );
+}
+
 
 
 // ============================================================================
@@ -474,6 +486,8 @@ function AccountRowContent({
                                 {account.custom_label}
                             </span>
                         )}
+                        {/* 提供商徽章 */}
+                        <ProviderBadge provider={account.provider} />
                         {/* 标签编辑输入框 */}
                         {isEditingLabel && (
                             <div className="flex items-center gap-1">

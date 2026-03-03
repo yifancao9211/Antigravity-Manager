@@ -195,3 +195,16 @@ export async function updateAccountLabel(accountId: string, label: string): Prom
     return await invoke('update_account_label', { accountId, label });
 }
 
+// Codex account management
+export async function addCodexAccountManual(token: string, refreshToken?: string): Promise<Account> {
+    return await invoke('add_codex_account_manual', { token, refreshToken });
+}
+
+export async function importCodexFromFile(): Promise<Account> {
+    return await invoke('import_codex_from_file');
+}
+
+export async function startCodexOAuthLogin(): Promise<Account> {
+    return await invoke('start_codex_oauth_login');
+}
+

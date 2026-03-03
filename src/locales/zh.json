@@ -293,7 +293,19 @@
             "oauth_error": "OAuth 授权失败: {{error}}",
             "status": {
                 "error_token": "请填写 Refresh Token"
-            }
+            },
+            "select_provider": "选择 AI 服务商",
+            "provider_google": "Google",
+            "provider_codex": "Codex (OpenAI)",
+            "codex_oauth": "OAuth 登录",
+            "codex_oauth_desc": "使用 OpenAI 账户登录",
+            "codex_token": "手动输入",
+            "codex_token_desc": "粘贴 sess-... token 或 sk-... API key",
+            "codex_token_placeholder": "输入 sess-... 或 sk-... token",
+            "codex_refresh_token_placeholder": "可选: 输入 ref-... refresh token",
+            "codex_import": "从文件导入",
+            "codex_import_desc": "从 ~/.codex/auth.json 导入",
+            "codex_import_btn": "从 Codex CLI 导入"
         },
         "table": {
             "email": "邮箱",

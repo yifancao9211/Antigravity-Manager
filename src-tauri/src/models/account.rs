@@ -2,6 +2,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use super::{token::TokenData, quota::QuotaData};
 
+/// 账户服务商类型
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum AccountProvider {
+    Google,  // 现有的 Google/Gemini 账户
+    Codex,   // OpenAI Codex 账户 (sess-... 或 sk-...)
+}
+
+impl Default for AccountProvider {
+    fn default() -> Self {
+        AccountProvider::Google
+    }
+}
+
 /// 账号数据结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Account {
@@ -60,12 +74,46 @@ pub struct Account {
     /// 用户自定义标签
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_label: Option<String>,
+    /// 账户服务商类型 (Google/Codex)
+    #[serde(default)]
+    pub provider: AccountProvider,
 }
 
 impl Account {
     pub fn new(id: String, email: String, token: TokenData) -> Self {
         let now = chrono::Utc::now().timestamp();
         Self {
+            provider: AccountProvider::Google,
+            id,
+            email,
+            name: None,
+            token,
+            device_profile: None,
+            device_history: Vec::new(),
+            quota: None,
+            disabled: false,
+            disabled_reason: None,
+            disabled_at: None,
+            proxy_disabled: false,
+            proxy_disabled_reason: None,
+            proxy_disabled_at: None,
+            protected_models: HashSet::new(),
+            validation_blocked: false,
+            validation_blocked_until: None,
+            validation_blocked_reason: None,
+            validation_url: None,
+            created_at: now,
+            last_used: now,
+            proxy_id: None,
+            proxy_bound_at: None,
+            custom_label: None,
+        }
+    }
+
+    pub fn new_codex(id: String, email: String, token: TokenData) -> Self {
+        let now = chrono::Utc::now().timestamp();
+        Self {
+            provider: AccountProvider::Codex,
             id,
             email,
             name: None,
@@ -124,6 +172,8 @@ pub struct AccountSummary {
     pub protected_models: HashSet<String>,
     pub created_at: i64,
     pub last_used: i64,
+    #[serde(default)]
+    pub provider: AccountProvider,
 }
 
 impl AccountIndex {

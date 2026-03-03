@@ -461,6 +461,48 @@ impl UpstreamClient {
             .map_err(|e| format!("Parse json failed: {}", e))?;
         Ok(json)
     }
+
+    /// Call OpenAI API directly for Codex accounts.
+    /// Sends the request body as-is (OpenAI format) to api.openai.com.
+    pub async fn call_openai_direct(
+        &self,
+        access_token: &str,
+        body: Value,
+        account_id: Option<&str>,
+    ) -> Result<UpstreamCallResult, String> {
+        let client = self.get_client(account_id).await;
+
+        let mut headers = header::HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            header::AUTHORIZATION,
+            header::HeaderValue::from_str(&format!("Bearer {}", access_token))
+                .map_err(|e| e.to_string())?,
+        );
+        headers.insert(
+            header::USER_AGENT,
+            header::HeaderValue::from_str(&self.get_user_agent().await).unwrap_or_else(|_| {
+                header::HeaderValue::from_static("antigravity")
+            }),
+        );
+
+        let url = "https://api.openai.com/v1/chat/completions";
+        let response = client
+            .post(url)
+            .headers(headers)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("OpenAI direct request failed: {}", e))?;
+
+        Ok(UpstreamCallResult {
+            response,
+            fallback_attempts: Vec::new(),
+        })
+    }
 }
 
 #[cfg(test)]

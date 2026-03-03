@@ -1,3 +1,5 @@
+export type AccountProvider = 'google' | 'codex';
+
 export interface Account {
     id: string;
     email: string;
@@ -14,6 +16,7 @@ export interface Account {
     proxy_disabled_at?: number;
     protected_models?: string[];
     custom_label?: string;  // 用户自定义标签
+    provider?: AccountProvider;  // 默认 'google'
     validation_blocked?: boolean;
     validation_blocked_until?: number;
     validation_blocked_reason?: string;

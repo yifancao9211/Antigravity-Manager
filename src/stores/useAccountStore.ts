@@ -31,6 +31,9 @@ interface AccountState {
     warmUpAccounts: () => Promise<string>;
     warmUpAccount: (accountId: string) => Promise<string>;
     updateAccountLabel: (accountId: string, label: string) => Promise<void>;
+    addCodexAccountManual: (token: string, refreshToken?: string) => Promise<void>;
+    importCodexFromFile: () => Promise<void>;
+    startCodexOAuthLogin: () => Promise<void>;
 }
 
 export const useAccountStore = create<AccountState>((set, get) => ({
@@ -309,6 +312,42 @@ export const useAccountStore = create<AccountState>((set, get) => ({
             set({ accounts: updatedAccounts });
         } catch (error) {
             console.error('[AccountStore] Update label failed:', error);
+            throw error;
+        }
+    },
+
+    addCodexAccountManual: async (token: string, refreshToken?: string) => {
+        set({ loading: true, error: null });
+        try {
+            await accountService.addCodexAccountManual(token, refreshToken);
+            await get().fetchAccounts();
+            set({ loading: false });
+        } catch (error) {
+            set({ error: String(error), loading: false });
+            throw error;
+        }
+    },
+
+    importCodexFromFile: async () => {
+        set({ loading: true, error: null });
+        try {
+            await accountService.importCodexFromFile();
+            await get().fetchAccounts();
+            set({ loading: false });
+        } catch (error) {
+            set({ error: String(error), loading: false });
+            throw error;
+        }
+    },
+
+    startCodexOAuthLogin: async () => {
+        set({ loading: true, error: null });
+        try {
+            await accountService.startCodexOAuthLogin();
+            await get().fetchAccounts();
+            set({ loading: false });
+        } catch (error) {
+            set({ error: String(error), loading: false });
             throw error;
         }
     },

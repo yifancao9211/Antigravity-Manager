@@ -296,7 +296,19 @@
             "oauth_error": "OAuth failed: {{error}}",
             "status": {
                 "error_token": "Please enter Refresh Token"
-            }
+            },
+            "select_provider": "Select AI Provider",
+            "provider_google": "Google",
+            "provider_codex": "Codex (OpenAI)",
+            "codex_oauth": "OAuth Login",
+            "codex_oauth_desc": "Login with your OpenAI account",
+            "codex_token": "Manual Token",
+            "codex_token_desc": "Paste a sess-... token or sk-... API key",
+            "codex_token_placeholder": "Enter sess-... or sk-... token",
+            "codex_refresh_token_placeholder": "Optional: Enter ref-... refresh token",
+            "codex_import": "Import from File",
+            "codex_import_desc": "Import from ~/.codex/auth.json",
+            "codex_import_btn": "Import from Codex CLI"
         },
         "table": {
             "email": "Email",
