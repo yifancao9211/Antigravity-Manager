@@ -1608,6 +1608,13 @@ pub async fn handle_completions(
         info!("✓ Using account: {} (type: {})", email, config.request_type);
 
         let proxy_token = token_manager.get_token_by_id(&account_id);
+
+        // [NEW] Determine account provider for upstream routing
+        let account_provider = proxy_token
+            .as_ref()
+            .map(|t| t.provider.clone())
+            .unwrap_or(crate::models::AccountProvider::Google);
+
         let (gemini_body, session_id, message_count) =
             transform_openai_request(&openai_req, &project_id, &mapped_model, proxy_token.as_ref());
 
