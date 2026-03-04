@@ -199,6 +199,12 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
                                             PRO
                                         </span>
                                     );
+                                } else if (tier.includes('codex')) {
+                                    return (
+                                        <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold shadow-sm border border-emerald-500/30">
+                                            CODEX
+                                        </span>
+                                    );
                                 } else {
                                     return (
                                         <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-gray-100 dark:bg-white/10 text-gray-500 dark:text-gray-400 text-[9px] font-bold shadow-sm border border-gray-200 dark:border-white/10">
@@ -230,10 +236,17 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
             <div className="flex-1 px-2 mb-2 overflow-y-auto scrollbar-none">
                 {account.provider === 'codex' ? (
                     <div className="flex items-center justify-center h-full py-4">
-                        <span className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 text-[11px] font-bold border border-emerald-200 dark:border-emerald-800/50">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                            Codex - Active
-                        </span>
+                        {account.proxy_disabled ? (
+                            <span className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 text-[11px] font-bold border border-red-200 dark:border-red-800/50">
+                                <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0 animate-pulse" />
+                                Codex - {t('accounts.rate_limited')}
+                            </span>
+                        ) : (
+                            <span className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 text-[11px] font-bold border border-emerald-200 dark:border-emerald-800/50">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                                Codex - {t('accounts.active')}
+                            </span>
+                        )}
                     </div>
                 ) : isDisabled || account.quota?.is_forbidden || account.proxy_disabled || account.validation_blocked ? (
                     <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 h-full py-4 text-center">

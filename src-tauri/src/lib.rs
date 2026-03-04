@@ -457,6 +457,7 @@ pub fn run() {
             // Codex account commands
             commands::add_codex_account_manual,
             commands::import_codex_from_file,
+            commands::import_codex_from_files,
             commands::start_codex_oauth_login,
             commands::import_v1_accounts,
             commands::import_from_db,

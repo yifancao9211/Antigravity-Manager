@@ -190,42 +190,40 @@ pub fn build_codex_api_key_token_data(
     )
 }
 
-/// Import Codex account from ~/.codex/auth.json
-pub async fn import_from_codex_auth_file() -> Result<TokenData, String> {
-    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
-    let auth_path = home.join(".codex").join("auth.json");
+/// Codex auth.json file structure (shared by all import paths)
+#[derive(Deserialize)]
+pub struct CodexAuthFile {
+    #[serde(alias = "OPENAI_API_KEY")]
+    pub access_token: Option<String>,
+    #[serde(alias = "OPENAI_BASE_URL")]
+    #[allow(dead_code)]
+    pub base_url: Option<String>,
+    pub refresh_token: Option<String>,
+    pub expires_at: Option<i64>,
+}
 
-    if !auth_path.exists() {
-        return Err(format!("Codex auth file not found: {}", auth_path.display()));
+/// Import Codex account from a specific file path
+pub async fn import_from_codex_auth_file_path(path: &std::path::Path) -> Result<TokenData, String> {
+    if !path.exists() {
+        return Err(format!("Codex auth file not found: {}", path.display()));
     }
 
-    let content = std::fs::read_to_string(&auth_path)
-        .map_err(|e| format!("Failed to read {}: {}", auth_path.display(), e))?;
-
-    #[derive(Deserialize)]
-    struct CodexAuthFile {
-        #[serde(alias = "OPENAI_API_KEY")]
-        access_token: Option<String>,
-        #[serde(alias = "OPENAI_BASE_URL")]
-        #[allow(dead_code)]
-        base_url: Option<String>,
-        refresh_token: Option<String>,
-        expires_at: Option<i64>,
-    }
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
 
     let auth: CodexAuthFile = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse Codex auth.json: {}", e))?;
+        .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
 
     let access_token = auth.access_token
-        .ok_or("No access_token/OPENAI_API_KEY found in auth.json")?;
+        .ok_or_else(|| format!("No access_token/OPENAI_API_KEY found in {}", path.display()))?;
 
     let is_api_key = access_token.starts_with("sk-");
 
     if is_api_key {
-        info!("Importing Codex API key from auth.json");
+        info!("Importing Codex API key from {}", path.display());
         Ok(build_codex_api_key_token_data(access_token, None))
     } else {
-        info!("Importing Codex OAuth token from auth.json");
+        info!("Importing Codex OAuth token from {}", path.display());
         let expires_in = auth.expires_at
             .map(|ea| ea - chrono::Utc::now().timestamp())
             .unwrap_or(3600);
@@ -239,6 +237,13 @@ pub async fn import_from_codex_auth_file() -> Result<TokenData, String> {
             None,
         ))
     }
+}
+
+/// Import Codex account from ~/.codex/auth.json
+pub async fn import_from_codex_auth_file() -> Result<TokenData, String> {
+    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    let auth_path = home.join(".codex").join("auth.json");
+    import_from_codex_auth_file_path(&auth_path).await
 }
 
 /// Check if a Codex token needs refresh and refresh it if needed

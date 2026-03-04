@@ -416,6 +416,45 @@ pub async fn warmup_model_directly(
     }
 }
 
+/// Send Codex warmup request via proxy internal API (records to traffic log)
+async fn warmup_codex_directly(access_token: &str, email: &str) -> Result<String, String> {
+    // Get currently configured proxy port
+    let port = config::load_app_config()
+        .map(|c| c.proxy.port)
+        .unwrap_or(8045);
+
+    let warmup_url = format!("http://127.0.0.1:{}/internal/warmup", port);
+    let body = json!({
+        "email": email,
+        "model": "gpt-5.3-codex",
+        "access_token": access_token,
+        "provider": "codex"
+    });
+
+    // Use a no-proxy client for local loopback requests
+    let client = rquest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .no_proxy()
+        .build()
+        .unwrap_or_else(|_| rquest::Client::new());
+
+    let resp = client
+        .post(&warmup_url)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let status = resp.status();
+    if status.is_success() {
+        Ok(format!("HTTP {} for {}", status, email))
+    } else {
+        let text = resp.text().await.unwrap_or_default();
+        Err(format!("HTTP {} - {}", status, text))
+    }
+}
+
 /// Smart warmup for all accounts
 pub async fn warm_up_all_accounts() -> Result<String, String> {
     let mut retry_count = 0;
@@ -432,14 +471,80 @@ pub async fn warm_up_all_accounts() -> Result<String, String> {
             return Ok("No accounts available".to_string());
         }
 
-        crate::modules::logger::log_info(&format!("[Warmup] Screening models for {} accounts...", target_accounts.len()));
+        // Separate Codex and Google accounts
+        let (codex_accounts, google_accounts): (Vec<_>, Vec<_>) = target_accounts
+            .into_iter()
+            .partition(|a| a.provider == crate::models::AccountProvider::Codex);
 
+        crate::modules::logger::log_info(&format!(
+            "[Warmup] Screening {} Google + {} Codex accounts...",
+            google_accounts.len(), codex_accounts.len()
+        ));
+
+        // ===== Warmup Codex accounts =====
+        let mut codex_warmed: u32 = 0;
+        let mut codex_failed: u32 = 0;
+        if !codex_accounts.is_empty() {
+            let batch_size = 5;
+            for batch in codex_accounts.chunks(batch_size) {
+                let mut handles = Vec::new();
+                for account in batch {
+                    let account = account.clone();
+                    handles.push(tokio::spawn(async move {
+                        let fresh_token = match crate::modules::codex_oauth::ensure_codex_fresh_token(&account.token).await {
+                            Ok(Some(new_token)) => {
+                                let mut updated = account.clone();
+                                updated.token = new_token;
+                                let _ = crate::modules::account::save_account(&updated);
+                                updated.token.access_token
+                            }
+                            Ok(None) => account.token.access_token.clone(),
+                            Err(e) => {
+                                // Don't mark forbidden — refresh_token_reused is normal concurrency
+                                crate::modules::logger::log_warn(&format!(
+                                    "[Warmup] Codex account {} token refresh failed: {}", account.email, e
+                                ));
+                                return Err(e);
+                            }
+                        };
+                        match warmup_codex_directly(&fresh_token, &account.email).await {
+                            Ok(msg) => {
+                                crate::modules::logger::log_info(&format!(
+                                    "[Warmup] ✓ Codex account {} warmup: {}", account.email, msg
+                                ));
+                                Ok(())
+                            }
+                            Err(e) => {
+                                crate::modules::logger::log_warn(&format!(
+                                    "[Warmup] ✗ Codex account {} warmup failed: {}", account.email, e
+                                ));
+                                // Only mark forbidden if warmup handler itself detected auth failure
+                                // (the handler already calls mark_account_forbidden for 401/403)
+                                Err(e)
+                            }
+                        }
+                    }));
+                }
+                for handle in handles {
+                    match handle.await {
+                        Ok(Ok(())) => codex_warmed += 1,
+                        _ => codex_failed += 1,
+                    }
+                }
+            }
+            crate::modules::logger::log_info(&format!(
+                "[Warmup] Codex warmup done: {} success, {} failed",
+                codex_warmed, codex_failed
+            ));
+        }
+
+        // ===== Warmup Google accounts =====
         let mut warmup_items = Vec::new();
         let mut has_near_ready_models = false;
 
         // Concurrently fetch quotas (batch size 5)
         let batch_size = 5;
-        for batch in target_accounts.chunks(batch_size) {
+        for batch in google_accounts.chunks(batch_size) {
             let mut handles = Vec::new();
             for account in batch {
                 let account = account.clone();
@@ -495,6 +600,9 @@ pub async fn warm_up_all_accounts() -> Result<String, String> {
             if warmup_items.is_empty() {
                 let skipped = total_before;
                 crate::modules::logger::log_info(&format!("[Warmup] Returning to frontend: All models in cooldown, skipped {}", skipped));
+                if codex_warmed > 0 {
+                    return Ok(format!("Codex: {} success, {} failed. Google: all {} models in cooldown", codex_warmed, codex_failed, skipped));
+                }
                 return Ok(format!("All models are in cooldown, skipped {} items", skipped));
             }
             
@@ -556,8 +664,13 @@ pub async fn warm_up_all_accounts() -> Result<String, String> {
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 let _ = crate::modules::account::refresh_all_quotas_logic().await;
             });
-            crate::modules::logger::log_info(&format!("[Warmup] Returning to frontend: Warmup task triggered for {} models", total));
-            return Ok(format!("Warmup task triggered for {} models", total));
+            let codex_msg = if codex_warmed > 0 || codex_failed > 0 {
+                format!(" + Codex: {} success, {} failed", codex_warmed, codex_failed)
+            } else {
+                String::new()
+            };
+            crate::modules::logger::log_info(&format!("[Warmup] Returning to frontend: Warmup task triggered for {} models{}", total, codex_msg));
+            return Ok(format!("Warmup task triggered for {} models{}", total, codex_msg));
         }
 
         if has_near_ready_models && retry_count < MAX_RETRIES {
@@ -567,6 +680,9 @@ pub async fn warm_up_all_accounts() -> Result<String, String> {
             continue;
         }
 
+        if codex_warmed > 0 || codex_failed > 0 {
+            return Ok(format!("Codex: {} success, {} failed. No Google models need warmup", codex_warmed, codex_failed));
+        }
         return Ok("No models need warmup".to_string());
     }
 }
@@ -579,7 +695,43 @@ pub async fn warm_up_account(account_id: &str) -> Result<String, String> {
     if account_owned.disabled || account_owned.proxy_disabled {
         return Err("Account is disabled".to_string());
     }
-    
+
+    // Codex accounts: validate token and send a real lightweight request
+    if account_owned.provider == crate::models::AccountProvider::Codex {
+        let fresh_token = match crate::modules::codex_oauth::ensure_codex_fresh_token(&account_owned.token).await {
+            Ok(Some(new_token)) => {
+                let mut updated = account_owned.clone();
+                updated.token = new_token;
+                if let Err(e) = crate::modules::account::save_account(&updated) {
+                    crate::modules::logger::log_warn(&format!("[Warmup] Failed to save refreshed Codex token: {}", e));
+                }
+                updated.token.access_token
+            }
+            Ok(None) => account_owned.token.access_token.clone(),
+            Err(e) => {
+                // Don't mark forbidden — token refresh failure is often transient
+                return Err(format!("Codex token refresh failed: {}", e));
+            }
+        };
+
+        // Send a real lightweight completion request to verify the account works
+        match warmup_codex_directly(&fresh_token, &account_owned.email).await {
+            Ok(msg) => {
+                crate::modules::logger::log_info(&format!(
+                    "[Warmup] ✓ Codex account {} warmup success: {}", account_owned.email, msg
+                ));
+                return Ok(format!("Codex warmup success: {}", msg));
+            }
+            Err(e) => {
+                crate::modules::logger::log_warn(&format!(
+                    "[Warmup] ✗ Codex account {} warmup failed: {}", account_owned.email, e
+                ));
+                // warmup handler already handles 401/403 marking if needed
+                return Err(format!("Codex warmup failed: {}", e));
+            }
+        }
+    }
+
     let email = account_owned.email.clone();
     let (token, pid) = get_valid_token_for_warmup(&account_owned).await?;
     let (fresh_quota, _) = fetch_quota_with_cache(&token, &email, Some(&pid), Some(&account_owned.id)).await.map_err(|e| format!("Failed to fetch quota: {}", e))?;

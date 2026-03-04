@@ -194,23 +194,7 @@ pub async fn fetch_account_quota(
     let mut account =
         modules::load_account(&account_id).map_err(crate::error::AppError::Account)?;
 
-    // Codex accounts don't use Google's quota API — return a simple active status
-    if account.provider == crate::models::AccountProvider::Codex {
-        let quota = QuotaData {
-            models: vec![],
-            last_updated: chrono::Utc::now().timestamp(),
-            is_forbidden: false,
-            forbidden_reason: None,
-            subscription_tier: Some("Codex".to_string()),
-            model_forwarding_rules: std::collections::HashMap::new(),
-        };
-        modules::update_account_quota(&account_id, quota.clone())
-            .map_err(crate::error::AppError::Account)?;
-        crate::modules::tray::update_tray_menus(&app);
-        return Ok(quota);
-    }
-
-    // 使用带重试的查询 (Shared logic)
+    // 使用带重试的查询 (Shared logic) — Codex 账号也走此路径，会从 OpenAI API 获取模型列表
     let quota = modules::account::fetch_quota_with_retry(&mut account).await?;
 
     // 4. 更新账号配额
@@ -550,6 +534,78 @@ pub async fn import_codex_from_file(
     let _ = crate::commands::proxy::reload_proxy_accounts(proxy_state).await;
 
     Ok(account)
+}
+
+/// Batch import result
+#[derive(serde::Serialize)]
+pub struct BatchImportResult {
+    pub success: u32,
+    pub failed: u32,
+    pub errors: Vec<String>,
+}
+
+/// Batch import Codex accounts from selected auth.json files
+#[tauri::command]
+pub async fn import_codex_from_files(
+    _app: tauri::AppHandle,
+    proxy_state: tauri::State<'_, crate::commands::proxy::ProxyServiceState>,
+    files: Vec<String>,
+) -> Result<BatchImportResult, String> {
+    use crate::models::Account;
+    use crate::modules::codex_oauth;
+
+    let mut success: u32 = 0;
+    let mut failed: u32 = 0;
+    let mut errors: Vec<String> = Vec::new();
+
+    for file_path_str in &files {
+        let path = std::path::Path::new(file_path_str);
+
+        let file_name = path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        if !path.is_file() {
+            errors.push(format!("{}: not a file", file_name));
+            failed += 1;
+            continue;
+        }
+
+        // Try to parse as CodexAuthFile
+        let token_data = match codex_oauth::import_from_codex_auth_file_path(path).await {
+            Ok(td) => td,
+            Err(e) => {
+                errors.push(format!("{}: {}", file_name, e));
+                failed += 1;
+                continue;
+            }
+        };
+
+        // Try to get user info
+        let email = match codex_oauth::get_codex_user_info(&token_data.access_token).await {
+            Ok(info) => info.email.unwrap_or_else(|| format!("codex-{}", file_name)),
+            Err(_) => format!("codex-{}", file_name),
+        };
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let account = Account::new_codex(id, email, token_data);
+
+        match modules::account::add_account_raw(account) {
+            Ok(_) => success += 1,
+            Err(e) => {
+                errors.push(format!("{}: {}", file_name, e));
+                failed += 1;
+            }
+        }
+    }
+
+    // Reload proxy pool if any accounts were added
+    if success > 0 {
+        let _ = crate::commands::proxy::reload_proxy_accounts(proxy_state).await;
+    }
+
+    Ok(BatchImportResult { success, failed, errors })
 }
 
 /// Start Codex OAuth login flow (opens browser for OpenAI login)

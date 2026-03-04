@@ -470,6 +470,12 @@ function AccountRowContent({
                                         {t('accounts.pro')}
                                     </span>
                                 );
+                            } else if (tier.includes('codex')) {
+                                return (
+                                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold shadow-sm border border-emerald-500/30 hover:scale-105 transition-transform cursor-default">
+                                        {t('accounts.tier_codex')}
+                                    </span>
+                                );
                             } else {
                                 return (
                                     <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-400 text-[10px] font-bold shadow-sm border border-gray-200 dark:border-white/10 hover:bg-gray-200 transition-colors cursor-default">

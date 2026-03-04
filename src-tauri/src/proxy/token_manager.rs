@@ -1049,10 +1049,34 @@ impl TokenManager {
         // 仅保留明确拥有该模型配额的账号
         // 这一步确保了 "保证有模型才可以进入轮询"，特别是对 Opus 4.6 等高端模型
         let candidate_count_before = tokens_snapshot.len();
-        
+
+        // 判断目标模型是否为 OpenAI 原生模型 (gpt-*, o1-*, o3-*, o4-*, chatgpt-*)
+        let is_openai_native_model = {
+            let lower = target_model.to_lowercase();
+            lower.starts_with("gpt-")
+                || lower.starts_with("o1-")
+                || lower.starts_with("o3-")
+                || lower.starts_with("o4-")
+                || lower.starts_with("chatgpt-")
+        };
+
         // 此处假设所有受支持的模型都会出现在 model_quotas 中
         // 如果 API 返回的配额信息不完整，可能会导致误杀，但为了严格性，我们执行此过滤
-        tokens_snapshot.retain(|t| t.model_quotas.contains_key(&normalized_target));
+        // Codex 账号对 OpenAI 原生模型跳过 model_quotas 过滤，因为它们通过 api.openai.com 直接转发
+        tokens_snapshot.retain(|t| {
+            if t.provider == crate::models::AccountProvider::Codex && is_openai_native_model {
+                return true; // Codex 账号接受所有 OpenAI 原生模型
+            }
+            t.model_quotas.contains_key(&normalized_target)
+        });
+
+        // 如果同时有 Codex 和 Google 账号可用，且目标是 OpenAI 原生模型，优先使用 Codex 账号
+        if is_openai_native_model {
+            let has_codex = tokens_snapshot.iter().any(|t| t.provider == crate::models::AccountProvider::Codex);
+            if has_codex {
+                tokens_snapshot.retain(|t| t.provider == crate::models::AccountProvider::Codex);
+            }
+        }
 
         if tokens_snapshot.is_empty() {
             if candidate_count_before > 0 {

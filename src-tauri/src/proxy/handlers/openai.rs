@@ -281,7 +281,7 @@ pub async fn handle_chat_completions(
         // [NEW] Branch upstream routing by account provider
         let call_result = match account_provider {
             crate::models::AccountProvider::Codex => {
-                // Codex accounts: send original OpenAI-format body directly to api.openai.com
+                // Codex accounts: convert to Responses API format and send to chatgpt.com/backend-api/codex/responses
                 // Ensure token is fresh before sending
                 let fresh_access_token = if let Some(ref pt) = proxy_token {
                     let temp_td = crate::models::TokenData::new(
@@ -299,22 +299,146 @@ pub async fn handle_chat_completions(
                 } else {
                     access_token.clone()
                 };
+
+                // Convert OpenAI Chat Completions format to Codex Responses API format
                 let openai_body = serde_json::to_value(&openai_req)
                     .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
-                match upstream
-                    .call_openai_direct(&fresh_access_token, openai_body, Some(account_id.as_str()))
+
+                let codex_body = convert_to_codex_responses_format(&openai_body);
+                debug!("[Codex] Converted request body: {}", serde_json::to_string(&codex_body).unwrap_or_default());
+
+                let codex_result = match upstream
+                    .call_openai_direct(&fresh_access_token, codex_body, Some(account_id.as_str()))
                     .await
                 {
                     Ok(r) => r,
                     Err(e) => {
                         last_error = e.clone();
                         debug!(
-                            "OpenAI (Codex) Request failed on attempt {}/{}: {}",
+                            "Codex Request failed on attempt {}/{}: {}",
                             attempt + 1,
                             max_attempts,
                             e
                         );
                         continue;
+                    }
+                };
+
+                // [FIX] Handle Codex response directly here.
+                // Codex API always returns SSE stream (stream: true is mandatory).
+                // The SSE format is Responses API (event: response.output_text.delta, etc.),
+                // NOT Gemini format. We must NOT fall through to the Gemini SSE parser below.
+                let codex_response = codex_result.response;
+                let codex_status = codex_response.status();
+
+                if !codex_status.is_success() {
+                    let status_code = codex_status.as_u16();
+                    let error_text = codex_response.text().await.unwrap_or_else(|_| format!("HTTP {}", status_code));
+                    last_error = format!("HTTP {}: {}", status_code, error_text);
+                    tracing::error!("[Codex-Upstream] Error Response {}: {}", status_code, error_text);
+
+                    if status_code == 429 || status_code == 529 || status_code == 503 || status_code == 500 {
+                        token_manager.mark_rate_limited_async(&email, status_code, None, &error_text, Some(&mapped_model)).await;
+                    }
+
+                    let strategy = determine_retry_strategy(status_code, &error_text, false);
+                    if apply_retry_strategy(strategy, attempt, max_attempts, status_code, &trace_id).await {
+                        continue;
+                    }
+                    return Ok((
+                        codex_status,
+                        [("X-Account-Email", email.as_str()), ("X-Mapped-Model", mapped_model.as_str())],
+                        Json(json!({"error": {"message": error_text, "type": "upstream_error", "code": status_code}})),
+                    ).into_response());
+                }
+
+                // Codex response is always SSE stream — parse with Codex-specific SSE converter
+                use axum::body::Body;
+                use axum::response::Response;
+                use futures::StreamExt;
+                use crate::proxy::mappers::openai::streaming::create_codex_responses_to_chat_stream;
+
+                let codex_raw_stream = Box::pin(codex_response.bytes_stream());
+                let mut chat_stream = create_codex_responses_to_chat_stream(
+                    codex_raw_stream,
+                    openai_req.model.clone(),
+                );
+
+                // Peek logic: verify we get real data before committing
+                let mut first_data_chunk = None;
+                let mut retry_this_account = false;
+                loop {
+                    match tokio::time::timeout(std::time::Duration::from_secs(60), chat_stream.next()).await {
+                        Ok(Some(Ok(bytes))) => {
+                            if bytes.is_empty() { continue; }
+                            let text = String::from_utf8_lossy(&bytes);
+                            if text.trim().starts_with(":") { continue; } // heartbeat
+                            if text.contains("\"error\"") {
+                                last_error = "Error event during Codex peek".to_string();
+                                retry_this_account = true;
+                                break;
+                            }
+                            first_data_chunk = Some(bytes);
+                            break;
+                        }
+                        Ok(Some(Err(e))) => {
+                            last_error = format!("Codex stream error: {}", e);
+                            retry_this_account = true;
+                            break;
+                        }
+                        Ok(None) => {
+                            last_error = "Empty Codex response stream".to_string();
+                            retry_this_account = true;
+                            break;
+                        }
+                        Err(_) => {
+                            last_error = "Timeout waiting for Codex data".to_string();
+                            retry_this_account = true;
+                            break;
+                        }
+                    }
+                }
+
+                if retry_this_account {
+                    continue;
+                }
+
+                let combined_stream = futures::stream::once(
+                    async move { Ok::<Bytes, String>(first_data_chunk.unwrap()) }
+                ).chain(chat_stream);
+
+                if client_wants_stream {
+                    // Client wants streaming: return SSE directly
+                    let body = Body::from_stream(combined_stream);
+                    return Ok(Response::builder()
+                        .header("Content-Type", "text/event-stream")
+                        .header("Cache-Control", "no-cache")
+                        .header("Connection", "keep-alive")
+                        .header("X-Accel-Buffering", "no")
+                        .header("X-Account-Email", &email)
+                        .header("X-Mapped-Model", &mapped_model)
+                        .body(body)
+                        .unwrap()
+                        .into_response());
+                } else {
+                    // Client wants non-streaming: collect SSE and return JSON
+                    use crate::proxy::mappers::openai::collector::collect_stream_to_json;
+                    match collect_stream_to_json(Box::pin(combined_stream)).await {
+                        Ok(full_response) => {
+                            info!("[{}] ✓ Codex stream collected to JSON", trace_id);
+                            return Ok((
+                                StatusCode::OK,
+                                [("X-Account-Email", email.as_str()), ("X-Mapped-Model", mapped_model.as_str())],
+                                Json(full_response),
+                            ).into_response());
+                        }
+                        Err(e) => {
+                            error!("[{}] Codex stream collection error: {}", trace_id, e);
+                            return Ok((
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("Codex stream collection error: {}", e),
+                            ).into_response());
+                        }
                     }
                 }
             }
@@ -796,6 +920,57 @@ pub async fn handle_chat_completions(
         )
             .into_response())
     }
+}
+
+/// Convert OpenAI Chat Completions format to Codex Responses API format.
+/// Chat Completions: { model, messages: [{role, content}], ... }
+/// Responses API:    { model, instructions, input, stream: true, store: false }
+fn convert_to_codex_responses_format(body: &serde_json::Value) -> serde_json::Value {
+    let mut codex_body = serde_json::Map::new();
+
+    // Copy model
+    if let Some(model) = body.get("model") {
+        codex_body.insert("model".to_string(), model.clone());
+    }
+
+    // Extract messages and convert to instructions + input
+    if let Some(messages) = body.get("messages").and_then(|m| m.as_array()) {
+        let mut instructions_parts: Vec<String> = Vec::new();
+        let mut input_parts: Vec<serde_json::Value> = Vec::new();
+
+        for msg in messages {
+            let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+            let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
+
+            match role {
+                "system" | "developer" => {
+                    instructions_parts.push(content.to_string());
+                }
+                _ => {
+                    // user, assistant, tool messages go to input
+                    input_parts.push(serde_json::json!({
+                        "role": role,
+                        "content": content,
+                    }));
+                }
+            }
+        }
+
+        // instructions is required by Codex API (can be empty string)
+        codex_body.insert(
+            "instructions".to_string(),
+            serde_json::Value::String(instructions_parts.join("\n")),
+        );
+
+        // input must always be an array for Codex API
+        codex_body.insert("input".to_string(), serde_json::Value::Array(input_parts));
+    }
+
+    // Codex API required fields
+    codex_body.insert("stream".to_string(), serde_json::Value::Bool(true));
+    codex_body.insert("store".to_string(), serde_json::Value::Bool(false));
+
+    serde_json::Value::Object(codex_body)
 }
 
 /// 处理 Legacy Completions API (/v1/completions)

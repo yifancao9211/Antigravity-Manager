@@ -457,6 +457,44 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
         handleAction(t('accounts.add.codex_import'), importCodexFromFile);
     };
 
+    const handleCodexBatchImport = async () => {
+        try {
+            const selectedFiles = await open({
+                multiple: true,
+                filters: [{ name: 'JSON', extensions: ['json'] }],
+            });
+            if (!selectedFiles || (Array.isArray(selectedFiles) && selectedFiles.length === 0)) return;
+
+            const files = Array.isArray(selectedFiles) ? selectedFiles : [selectedFiles];
+
+            setStatus('loading');
+            setMessage(t('accounts.add.codex_batch_import'));
+
+            const result = await invoke('import_codex_from_files', { files }) as { success: number; failed: number; errors: string[] };
+
+            if (result.success > 0) {
+                await fetchAccounts();
+            }
+
+            if (result.failed === 0 && result.success > 0) {
+                setStatus('success');
+                setMessage(t('accounts.add.codex_batch_import_success', { count: result.success }));
+            } else if (result.success > 0 && result.failed > 0) {
+                setStatus('success');
+                setMessage(t('accounts.add.codex_batch_import_partial', { success: result.success, failed: result.failed }));
+            } else if (result.success === 0 && result.failed > 0) {
+                setStatus('error');
+                setMessage(t('accounts.add.codex_batch_import_failed', { count: result.failed }));
+            } else {
+                setStatus('error');
+                setMessage(t('accounts.add.codex_batch_import_empty'));
+            }
+        } catch (error) {
+            setStatus('error');
+            setMessage(String(error));
+        }
+    };
+
     // 状态提示组件
     const StatusAlert = () => {
         if (status === 'idle' || !message) return null;
@@ -845,6 +883,14 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
                                             >
                                                 <Database className="w-4 h-4" />
                                                 {t('accounts.add.codex_import_btn')}
+                                            </button>
+                                            <button
+                                                className="w-full px-4 py-3 bg-gray-50 dark:bg-base-200 text-gray-700 dark:text-gray-300 font-medium rounded-xl border border-gray-200 dark:border-base-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 hover:border-emerald-200 dark:hover:border-emerald-800 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                                                onClick={handleCodexBatchImport}
+                                                disabled={status === 'loading' || status === 'success'}
+                                            >
+                                                <FileClock className="w-4 h-4" />
+                                                {t('accounts.add.codex_batch_import_btn')}
                                             </button>
                                         </div>
                                     )}

@@ -31,7 +31,7 @@ import { isTauri } from "../utils/env";
 import { request as invoke } from "../utils/request";
 import { useTranslation } from "react-i18next";
 
-type FilterType = "all" | "pro" | "ultra" | "free";
+type FilterType = "all" | "pro" | "ultra" | "free" | "codex";
 type ViewMode = "list" | "grid";
 
 
@@ -252,8 +252,11 @@ function Accounts() {
       ).length,
       free: searchedAccounts.filter((a) => {
         const tier = a.quota?.subscription_tier?.toLowerCase();
-        return tier && !tier.includes("pro") && !tier.includes("ultra");
+        return tier && !tier.includes("pro") && !tier.includes("ultra") && !tier.includes("codex");
       }).length,
+      codex: searchedAccounts.filter((a) =>
+        a.provider === "codex" || a.quota?.subscription_tier?.toLowerCase().includes("codex"),
+      ).length,
     };
   }, [searchedAccounts]);
 
@@ -272,8 +275,12 @@ function Accounts() {
     } else if (filter === "free") {
       result = result.filter((a) => {
         const tier = a.quota?.subscription_tier?.toLowerCase();
-        return tier && !tier.includes("pro") && !tier.includes("ultra");
+        return tier && !tier.includes("pro") && !tier.includes("ultra") && !tier.includes("codex");
       });
+    } else if (filter === "codex") {
+      result = result.filter((a) =>
+        a.provider === "codex" || a.quota?.subscription_tier?.toLowerCase().includes("codex"),
+      );
     }
 
     return result;
@@ -906,6 +913,28 @@ function Accounts() {
                 : "bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400"
             )}>
               {filterCounts.free}
+            </span>
+          </button>
+
+          {/* CODEX */}
+          <button
+            className={cn(
+              "flex px-2 lg:px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all items-center gap-1 lg:gap-1.5 whitespace-nowrap shrink-0",
+              filter === 'codex'
+                ? "bg-white dark:bg-base-100 text-emerald-600 dark:text-emerald-400 shadow-sm ring-1 ring-black/5"
+                : "text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-base-content hover:bg-white/40"
+            )}
+            onClick={() => setFilter('codex')}
+            title={`${t('accounts.filter_codex')} (${filterCounts.codex})`}
+          >
+            <span className="hidden md:inline">{t('accounts.filter_codex')}</span>
+            <span className={cn(
+              "px-1.5 py-0.5 rounded-md text-[10px] font-bold transition-colors",
+              filter === 'codex'
+                ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400"
+                : "bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400"
+            )}>
+              {filterCounts.codex}
             </span>
           </button>
         </div>

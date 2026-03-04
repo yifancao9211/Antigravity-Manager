@@ -124,6 +124,10 @@
         "ultra": "ULTRA",
         "pro": "PRO",
         "free": "FREE",
+        "filter_codex": "CODEX",
+        "tier_codex": "CODEX",
+        "active": "活跃",
+        "rate_limited": "限流中",
         "edit_label": "编辑标签",
         "custom_label_placeholder": "输入自定义标签",
         "label_updated": "标签已更新",
@@ -305,7 +309,13 @@
             "codex_refresh_token_placeholder": "可选: 输入 ref-... refresh token",
             "codex_import": "从文件导入",
             "codex_import_desc": "从 ~/.codex/auth.json 导入",
-            "codex_import_btn": "从 Codex CLI 导入"
+            "codex_import_btn": "从 Codex CLI 导入",
+            "codex_batch_import": "批量导入文件",
+            "codex_batch_import_btn": "批量导入文件",
+            "codex_batch_import_success": "成功导入 {{count}} 个账户",
+            "codex_batch_import_partial": "导入完成: {{success}} 个成功, {{failed}} 个失败",
+            "codex_batch_import_failed": "全部 {{count}} 个文件导入失败",
+            "codex_batch_import_empty": "目录中未找到有效的 Codex 认证文件"
         },
         "table": {
             "email": "邮箱",

@@ -127,6 +127,10 @@
         "ultra": "ULTRA",
         "pro": "PRO",
         "free": "FREE",
+        "filter_codex": "CODEX",
+        "tier_codex": "CODEX",
+        "active": "Active",
+        "rate_limited": "Rate Limited",
         "edit_label": "Edit Label",
         "custom_label_placeholder": "Enter custom label",
         "label_updated": "Label updated",
@@ -308,7 +312,13 @@
             "codex_refresh_token_placeholder": "Optional: Enter ref-... refresh token",
             "codex_import": "Import from File",
             "codex_import_desc": "Import from ~/.codex/auth.json",
-            "codex_import_btn": "Import from Codex CLI"
+            "codex_import_btn": "Import from Codex CLI",
+            "codex_batch_import": "Batch Import Files",
+            "codex_batch_import_btn": "Batch Import Files",
+            "codex_batch_import_success": "Successfully imported {{count}} accounts",
+            "codex_batch_import_partial": "Import finished: {{success}} success, {{failed}} failed",
+            "codex_batch_import_failed": "All {{count}} files failed to import",
+            "codex_batch_import_empty": "No valid Codex auth files found in the directory"
         },
         "table": {
             "email": "Email",

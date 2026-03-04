@@ -641,6 +641,162 @@ where
     Box::pin(stream)
 }
 
+/// Parse Codex Responses API SSE stream and convert to OpenAI Chat Completions SSE format.
+/// Codex API (chatgpt.com/backend-api/codex/responses) returns events like:
+///   event: response.output_text.delta
+///   data: {"type":"response.output_text.delta","delta":"Hello",...}
+///   event: response.completed
+///   data: {"type":"response.completed","response":{...}}
+///
+/// This function converts them to standard OpenAI Chat Completions chunk format:
+///   data: {"id":"chatcmpl-xxx","object":"chat.completion.chunk","choices":[{"delta":{"content":"Hello"}}]}
+pub fn create_codex_responses_to_chat_stream<S, E>(
+    mut codex_stream: Pin<Box<S>>,
+    model: String,
+) -> Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>
+where
+    S: Stream<Item = Result<Bytes, E>> + Send + ?Sized + 'static,
+    E: std::fmt::Display + Send + 'static,
+{
+    let mut buffer = BytesMut::new();
+    let stream_id = format!("chatcmpl-{}", Uuid::new_v4());
+    let created_ts = Utc::now().timestamp();
+
+    let stream = async_stream::stream! {
+        let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Track the current SSE event type (set by "event:" lines)
+        let mut current_event_type = String::new();
+
+        loop {
+            tokio::select! {
+                item = codex_stream.next() => {
+                    match item {
+                        Some(Ok(bytes)) => {
+                            buffer.extend_from_slice(&bytes);
+                            while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+                                let line_raw = buffer.split_to(pos + 1);
+                                if let Ok(line_str) = std::str::from_utf8(&line_raw) {
+                                    let line = line_str.trim();
+                                    if line.is_empty() {
+                                        current_event_type.clear();
+                                        continue;
+                                    }
+
+                                    // SSE "event:" line sets the event type
+                                    if line.starts_with("event: ") || line.starts_with("event:") {
+                                        current_event_type = line.trim_start_matches("event:").trim().to_string();
+                                        continue;
+                                    }
+
+                                    // SSE comment (heartbeat)
+                                    if line.starts_with(":") {
+                                        continue;
+                                    }
+
+                                    if !line.starts_with("data: ") && !line.starts_with("data:") {
+                                        continue;
+                                    }
+
+                                    let json_part = line.trim_start_matches("data:").trim();
+                                    if json_part == "[DONE]" {
+                                        continue;
+                                    }
+
+                                    if let Ok(json) = serde_json::from_str::<Value>(json_part) {
+                                        // Determine event type from JSON "type" field or from SSE event line
+                                        let event_type = json.get("type")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or(&current_event_type);
+
+                                        match event_type {
+                                            "response.output_text.delta" => {
+                                                // Extract delta text
+                                                if let Some(delta) = json.get("delta").and_then(|v| v.as_str()) {
+                                                    if !delta.is_empty() {
+                                                        let chunk = json!({
+                                                            "id": &stream_id,
+                                                            "object": "chat.completion.chunk",
+                                                            "created": created_ts,
+                                                            "model": &model,
+                                                            "choices": [{
+                                                                "index": 0,
+                                                                "delta": {
+                                                                    "content": delta
+                                                                },
+                                                                "finish_reason": serde_json::Value::Null
+                                                            }]
+                                                        });
+                                                        let sse_out = format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default());
+                                                        yield Ok::<Bytes, String>(Bytes::from(sse_out));
+                                                    }
+                                                }
+                                            }
+                                            "response.output_item.added" => {
+                                                // First chunk: emit role
+                                                let chunk = json!({
+                                                    "id": &stream_id,
+                                                    "object": "chat.completion.chunk",
+                                                    "created": created_ts,
+                                                    "model": &model,
+                                                    "choices": [{
+                                                        "index": 0,
+                                                        "delta": {
+                                                            "role": "assistant",
+                                                            "content": ""
+                                                        },
+                                                        "finish_reason": serde_json::Value::Null
+                                                    }]
+                                                });
+                                                let sse_out = format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default());
+                                                yield Ok::<Bytes, String>(Bytes::from(sse_out));
+                                            }
+                                            "response.completed" | "response.incomplete" => {
+                                                // Final chunk with finish_reason
+                                                let finish = if event_type == "response.completed" { "stop" } else { "length" };
+                                                let chunk = json!({
+                                                    "id": &stream_id,
+                                                    "object": "chat.completion.chunk",
+                                                    "created": created_ts,
+                                                    "model": &model,
+                                                    "choices": [{
+                                                        "index": 0,
+                                                        "delta": {},
+                                                        "finish_reason": finish
+                                                    }]
+                                                });
+                                                let sse_out = format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default());
+                                                yield Ok::<Bytes, String>(Bytes::from(sse_out));
+                                            }
+                                            // response.created, response.content_part.added/done,
+                                            // response.output_text.done, response.output_item.done
+                                            // — these are structural events, skip them for Chat format
+                                            _ => {
+                                                tracing::debug!("[Codex->Chat] Skipping event: {}", event_type);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Some(Err(e)) => {
+                            tracing::error!("[Codex->Chat] Stream error: {}", e);
+                            break;
+                        }
+                        None => break,
+                    }
+                }
+                _ = heartbeat_interval.tick() => {
+                    yield Ok::<Bytes, String>(Bytes::from(": ping\n\n"));
+                }
+            }
+        }
+
+        yield Ok::<Bytes, String>(Bytes::from("data: [DONE]\n\n"));
+    };
+    Box::pin(stream)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

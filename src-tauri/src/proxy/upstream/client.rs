@@ -462,8 +462,8 @@ impl UpstreamClient {
         Ok(json)
     }
 
-    /// Call OpenAI API directly for Codex accounts.
-    /// Sends the request body as-is (OpenAI format) to api.openai.com.
+    /// Call OpenAI Codex API directly for Codex accounts.
+    /// Sends the request body to chatgpt.com/backend-api/codex/responses.
     pub async fn call_openai_direct(
         &self,
         access_token: &str,
@@ -489,20 +489,67 @@ impl UpstreamClient {
             }),
         );
 
-        let url = "https://api.openai.com/v1/chat/completions";
+        // Extract ChatGPT-Account-Id from JWT claims
+        if let Some(chatgpt_account_id) = extract_chatgpt_account_id(access_token) {
+            if let Ok(val) = header::HeaderValue::from_str(&chatgpt_account_id) {
+                headers.insert(
+                    header::HeaderName::from_static("chatgpt-account-id"),
+                    val,
+                );
+            }
+        }
+
+        let url = "https://chatgpt.com/backend-api/codex/responses";
+        tracing::debug!("[Codex] Sending request to {}", url);
         let response = client
             .post(url)
             .headers(headers)
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("OpenAI direct request failed: {}", e))?;
+            .map_err(|e| format!("Codex request failed: {}", e))?;
 
         Ok(UpstreamCallResult {
             response,
             fallback_attempts: Vec::new(),
         })
     }
+}
+
+/// Extract chatgpt_account_id from a JWT access token's claims
+fn extract_chatgpt_account_id(token: &str) -> Option<String> {
+    // JWT format: header.payload.signature
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    // Decode the payload (base64url)
+    use base64::Engine;
+    let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let payload_bytes = engine.decode(parts[1]).ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&payload_bytes).ok()?;
+
+    // Try multiple paths to find the account ID (matching OpenCode's extractAccountIdFromClaims)
+    if let Some(id) = claims.get("chatgpt_account_id").and_then(|v| v.as_str()) {
+        return Some(id.to_string());
+    }
+    if let Some(id) = claims
+        .get("https://api.openai.com/auth")
+        .and_then(|v| v.get("chatgpt_account_id"))
+        .and_then(|v| v.as_str())
+    {
+        return Some(id.to_string());
+    }
+    if let Some(id) = claims
+        .get("organizations")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|org| org.get("id"))
+        .and_then(|v| v.as_str())
+    {
+        return Some(id.to_string());
+    }
+    None
 }
 
 #[cfg(test)]

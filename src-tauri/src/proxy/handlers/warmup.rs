@@ -10,6 +10,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Json, Response},
 };
+use rquest;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::{info, warn};
@@ -29,6 +30,8 @@ pub struct WarmupRequest {
     pub access_token: Option<String>,
     /// 可选：直接提供 Project ID
     pub project_id: Option<String>,
+    /// 可选：账号提供商 ("google" | "codex")，默认 "google"
+    pub provider: Option<String>,
 }
 
 /// 预热响应
@@ -72,6 +75,119 @@ pub async fn handle_warmup(
         "[Warmup-API] ========== START: email={}, model={} ==========",
         req.email, req.model
     );
+
+    // ===== Codex (OpenAI) warmup: direct request to OpenAI API =====
+    let is_codex = req.provider.as_deref() == Some("codex");
+    if is_codex {
+        let access_token = match &req.access_token {
+            Some(at) => at.clone(),
+            None => {
+                warn!("[Warmup-API] Codex warmup requires access_token for {}", req.email);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(WarmupResponse {
+                        success: false,
+                        message: "Codex warmup requires access_token".to_string(),
+                        error: None,
+                    }),
+                )
+                    .into_response();
+            }
+        };
+
+        let client = rquest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| rquest::Client::new());
+
+        // Use GET /v1/me to validate token without consuming rate limits
+        // This is the same endpoint used by get_codex_user_info() and works with sess-* tokens
+        let resp = client
+            .get("https://api.openai.com/v1/me")
+            .header("Authorization", format!("Bearer {}", access_token))
+            .send()
+            .await;
+
+        let duration = start_time.elapsed().as_millis() as u64;
+
+        let (status_code, success, error_msg, resp_body) = match resp {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                let text = response.text().await.unwrap_or_default();
+                if status == 200 {
+                    (status, true, None, Some(text))
+                } else {
+                    (status, false, Some(text.clone()), Some(text))
+                }
+            }
+            Err(e) => (500, false, Some(format!("Request failed: {}", e)), None),
+        };
+
+        // Record to traffic log
+        let log = ProxyRequestLog {
+            id: uuid::Uuid::new_v4().to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            method: "GET".to_string(),
+            url: format!("/internal/warmup -> token_validate (codex)"),
+            status: status_code,
+            duration,
+            model: Some(req.model.clone()),
+            mapped_model: Some("token_validate".to_string()),
+            account_email: Some(req.email.clone()),
+            client_ip: Some("127.0.0.1".to_string()),
+            error: error_msg.clone(),
+            request_body: Some(format!(
+                "{{\"type\": \"codex_warmup\", \"model\": \"{}\"}}",
+                req.model
+            )),
+            response_body: resp_body,
+            input_tokens: Some(0),
+            output_tokens: Some(0),
+            protocol: Some("warmup".to_string()),
+            username: None,
+            cursor_payload_kind: None,
+        };
+        state.monitor.log_request(log).await;
+
+        if success {
+            info!(
+                "[Warmup-API] ========== CODEX SUCCESS: {} / {} ({}ms, HTTP {}) ==========",
+                req.email, req.model, duration, status_code
+            );
+            return (
+                StatusCode::OK,
+                Json(WarmupResponse {
+                    success: true,
+                    message: format!("Codex warmup OK for {} (HTTP {})", req.email, status_code),
+                    error: None,
+                }),
+            )
+                .into_response();
+        } else {
+            warn!(
+                "[Warmup-API] ========== CODEX FAILED: {} / {} ({}ms, HTTP {}) ==========",
+                req.email, req.model, duration, status_code
+            );
+
+            // Mark forbidden if 401/403
+            if status_code == 401 || status_code == 403 {
+                if let Some(account_id) = crate::modules::account::find_account_id_by_email(&req.email) {
+                    let reason = error_msg.as_deref().unwrap_or("Codex warmup auth failure");
+                    let _ = crate::modules::account::mark_account_forbidden(&account_id, reason);
+                }
+            }
+
+            return (
+                StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                Json(WarmupResponse {
+                    success: false,
+                    message: format!("Codex warmup failed: HTTP {}", status_code),
+                    error: error_msg,
+                }),
+            )
+                .into_response();
+        }
+    }
 
     // ===== 步骤 1: 获取 Token =====
     let (access_token, project_id, account_id) =

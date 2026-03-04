@@ -1460,6 +1460,88 @@ pub async fn fetch_quota_with_retry(account: &mut Account) -> crate::error::AppR
     use crate::modules::oauth;
     use reqwest::StatusCode;
 
+    // Codex accounts: use hardcoded model list (OAuth token lacks api.model.read scope)
+    // Model list aligned with OpenCode's allowedModels
+    if account.provider == crate::models::AccountProvider::Codex {
+        // Validate token by calling OpenAI API
+        let fresh_token = match crate::modules::codex_oauth::ensure_codex_fresh_token(&account.token).await {
+            Ok(Some(new_token)) => {
+                account.token = new_token;
+                if let Err(e) = save_account(account) {
+                    tracing::warn!("Failed to save refreshed Codex token: {}", e);
+                }
+                account.token.access_token.clone()
+            }
+            Ok(None) => account.token.access_token.clone(),
+            Err(e) => {
+                tracing::warn!("Codex token refresh failed for {}: {}", account.email, e);
+                // Don't mark forbidden — refresh_token_reused is a normal concurrency error
+                // Just return the hardcoded models; the account can still work on next request
+                return Ok(QuotaData {
+                    models: vec![],
+                    last_updated: chrono::Utc::now().timestamp(),
+                    is_forbidden: false,
+                    forbidden_reason: None,
+                    subscription_tier: Some("Codex".to_string()),
+                    model_forwarding_rules: std::collections::HashMap::new(),
+                });
+            }
+        };
+
+        // Verify the token is actually valid by calling OpenAI user info API
+        match crate::modules::codex_oauth::get_codex_user_info(&fresh_token).await {
+            Ok(_) => {
+                tracing::info!("Codex token validated for {}", account.email);
+            }
+            Err(e) => {
+                tracing::warn!("Codex token invalid for {}: {}", account.email, e);
+                // Don't mark forbidden — validation may fail due to transient network issues
+                // Return empty models but not forbidden, so account stays active for retry
+                return Ok(QuotaData {
+                    models: vec![],
+                    last_updated: chrono::Utc::now().timestamp(),
+                    is_forbidden: false,
+                    forbidden_reason: None,
+                    subscription_tier: Some("Codex".to_string()),
+                    model_forwarding_rules: std::collections::HashMap::new(),
+                });
+            }
+        }
+
+        let mq = |name: &str, display: &str, recommended: bool| -> crate::models::quota::ModelQuota {
+            crate::models::quota::ModelQuota {
+                name: name.to_string(),
+                percentage: 100,
+                reset_time: String::new(),
+                display_name: Some(display.to_string()),
+                supports_images: Some(false),
+                supports_thinking: Some(true),
+                thinking_budget: None,
+                recommended: Some(recommended),
+                max_tokens: None,
+                max_output_tokens: None,
+                supported_mime_types: None,
+            }
+        };
+        let codex_models = vec![
+            mq("gpt-5.3-codex", "GPT-5.3 Codex", true),
+            mq("gpt-5.2-codex", "GPT-5.2 Codex", false),
+            mq("gpt-5.2", "GPT-5.2", false),
+            mq("gpt-5.1-codex", "GPT-5.1 Codex", false),
+            mq("gpt-5.1-codex-max", "GPT-5.1 Codex Max", false),
+            mq("gpt-5.1-codex-mini", "GPT-5.1 Codex Mini", false),
+        ];
+        let quota = QuotaData {
+            models: codex_models,
+            last_updated: chrono::Utc::now().timestamp(),
+            is_forbidden: false,
+            forbidden_reason: None,
+            subscription_tier: Some("Codex".to_string()),
+            model_forwarding_rules: std::collections::HashMap::new(),
+        };
+        return Ok(quota);
+    }
+
     // 1. Time-based check - ensure Token is valid first
     let token = match match account.provider {
         crate::models::AccountProvider::Codex => {
