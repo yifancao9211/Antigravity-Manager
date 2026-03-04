@@ -106,6 +106,7 @@
         "switch_successfully": "Switch to Best",
         "view_all_accounts": "View All Accounts",
         "export_data": "Export Data",
+        "web_quota_summary": "Web Quota Summary",
         "for_gemini": "For Gemini",
         "for_claude": "For Claude",
         "toast": {

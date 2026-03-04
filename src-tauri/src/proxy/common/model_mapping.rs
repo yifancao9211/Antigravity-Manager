@@ -63,6 +63,30 @@ static CLAUDE_TO_GEMINI: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|
     m.insert("gpt-3.5-turbo-1106", "gemini-2.5-flash");
     m.insert("gpt-3.5-turbo-0613", "gemini-2.5-flash");
 
+    // GPT-4.1 series
+    m.insert("gpt-4.1", "gemini-3.1-pro-preview");
+    m.insert("gpt-4.1-mini", "gemini-2.5-flash");
+    m.insert("gpt-4.1-nano", "gemini-2.5-flash");
+
+    // GPT-5 series (Cursor uses gpt-5.x-codex as model IDs)
+    m.insert("gpt-5", "gemini-3.1-pro-preview");
+    m.insert("gpt-5-codex", "gemini-3.1-pro-preview");
+    m.insert("gpt-5.1", "gemini-3.1-pro-preview");
+    m.insert("gpt-5.1-codex", "gemini-3.1-pro-preview");
+    m.insert("gpt-5.2", "gemini-3.1-pro-preview");
+    m.insert("gpt-5.2-codex", "gemini-3.1-pro-preview");
+    m.insert("gpt-5.3", "gemini-3.1-pro-preview");
+    m.insert("gpt-5.3-codex", "gemini-3.1-pro-preview");
+
+    // o-series reasoning models
+    m.insert("o1", "gemini-3.1-pro-preview");
+    m.insert("o1-preview", "gemini-3.1-pro-preview");
+    m.insert("o1-mini", "gemini-2.5-flash");
+    m.insert("o3", "gemini-3.1-pro-preview");
+    m.insert("o3-mini", "gemini-2.5-flash");
+    m.insert("o3-pro", "gemini-3.1-pro-preview");
+    m.insert("o4-mini", "gemini-2.5-flash");
+
     // Gemini 协议映射表
     m.insert("gemini-2.5-flash-lite", "gemini-2.5-flash");
     m.insert("gemini-2.5-flash-thinking", "gemini-2.5-flash-thinking");

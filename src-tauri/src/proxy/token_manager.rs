@@ -911,18 +911,20 @@ impl TokenManager {
         let c1 = available[pick1];
         let c2 = available[pick2];
 
-        // 选择配额更高的
-        let selected = if c1.remaining_quota.unwrap_or(0) >= c2.remaining_quota.unwrap_or(0) {
+        // [FIX] 使用目标模型的具体配额进行比较，而非整体 remaining_quota
+        let quota_c1 = c1.model_quotas.get(normalized_target).copied().unwrap_or(c1.remaining_quota.unwrap_or(0));
+        let quota_c2 = c2.model_quotas.get(normalized_target).copied().unwrap_or(c2.remaining_quota.unwrap_or(0));
+        let selected = if quota_c1 >= quota_c2 {
             c1
         } else {
             c2
         };
 
         tracing::debug!(
-            "🎲 [P2C] Selected {} ({}%) from [{}({}%), {}({}%)]",
-            selected.email, selected.remaining_quota.unwrap_or(0),
-            c1.email, c1.remaining_quota.unwrap_or(0),
-            c2.email, c2.remaining_quota.unwrap_or(0)
+            "🎲 [P2C] Selected {} (model_quota={}%, overall={}%) from [{}({}%), {}({}%)]",
+            selected.email, selected.model_quotas.get(normalized_target).copied().unwrap_or(-1), selected.remaining_quota.unwrap_or(0),
+            c1.email, quota_c1,
+            c2.email, quota_c2
         );
 
         Some(selected)
@@ -1063,12 +1065,34 @@ impl TokenManager {
         // 此处假设所有受支持的模型都会出现在 model_quotas 中
         // 如果 API 返回的配额信息不完整，可能会导致误杀，但为了严格性，我们执行此过滤
         // Codex 账号对 OpenAI 原生模型跳过 model_quotas 过滤，因为它们通过 api.openai.com 直接转发
+        let pre_filter_count = tokens_snapshot.len();
         tokens_snapshot.retain(|t| {
             if t.provider == crate::models::AccountProvider::Codex && is_openai_native_model {
                 return true; // Codex 账号接受所有 OpenAI 原生模型
             }
-            t.model_quotas.contains_key(&normalized_target)
+            // [FIX] 不仅检查模型 key 是否存在，还要求配额 > 0
+            match t.model_quotas.get(&normalized_target) {
+                Some(&pct) => pct > 0,
+                None => false,
+            }
         });
+
+        // [FALLBACK] 如果严格过滤把所有账号都排除了（可能是配额数据过时），
+        // 回退到宽松模式（只检查 key 存在），避免所有请求都被拒绝
+        if tokens_snapshot.is_empty() && pre_filter_count > 0 {
+            tokens_snapshot = self.tokens.iter()
+                .map(|entry| entry.value().clone())
+                .filter(|t| {
+                    if t.provider == crate::models::AccountProvider::Codex && is_openai_native_model {
+                        return true;
+                    }
+                    t.model_quotas.contains_key(&normalized_target)
+                })
+                .collect();
+            if !tokens_snapshot.is_empty() {
+                tracing::warn!("[TokenManager] All accounts have 0% quota for {}, falling back to lenient selection", normalized_target);
+            }
+        }
 
         // 如果同时有 Codex 和 Google 账号可用，且目标是 OpenAI 原生模型，优先使用 Codex 账号
         if is_openai_native_model {

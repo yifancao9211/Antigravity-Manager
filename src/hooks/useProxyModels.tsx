@@ -4,6 +4,31 @@ import { useAccountStore } from '../stores/useAccountStore';
 import { Bot } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+/**
+ * Infer a display group for dynamic models not found in MODEL_CONFIG.
+ * Keeps the dropdown organized by model family.
+ */
+function inferModelGroup(modelName: string): string {
+    const lower = modelName.toLowerCase();
+    if (lower.startsWith('gpt-')) return 'GPT';
+    if (/^o[1-9]/.test(lower)) return 'GPT';       // o1, o3, o4-mini etc.
+    if (lower.startsWith('chatgpt-')) return 'GPT';
+    if (lower.startsWith('gemini-3')) return 'Gemini 3';
+    if (lower.startsWith('gemini-2.5')) return 'Gemini 2.5';
+    if (lower.startsWith('gemini-2')) return 'Gemini 2';
+    if (lower.startsWith('gemini-')) return 'Gemini';
+    if (lower.startsWith('claude-')) return 'Claude';
+    return 'Other';
+}
+
+/** Models with these prefixes are Codex-native and not valid Gemini/Claude routing targets */
+function isValidRoutingTarget(modelName: string): boolean {
+    const lower = modelName.toLowerCase();
+    // Filter out Codex plan/tier identifiers (codex-5h, codex-7d, etc.)
+    if (lower.startsWith('codex-')) return false;
+    return true;
+}
+
 export const useProxyModels = () => {
     const { t } = useTranslation();
     const { accounts, fetchAccounts } = useAccountStore();
@@ -34,6 +59,8 @@ export const useProxyModels = () => {
         // Step 2: 优先展示来自账号的动态模型（display_name 为主名称，name 为 ID）
         for (const [key, m] of dynamicMap) {
             if (seenIds.has(key)) continue;
+            // Filter out Codex-native identifiers (codex-5h, codex-7d etc.) — not valid routing targets
+            if (!isValidRoutingTarget(m.name)) continue;
             seenIds.add(key);
 
             // 尝试匹配 MODEL_CONFIG 里的图标与分组
@@ -48,7 +75,7 @@ export const useProxyModels = () => {
             const icon = CfgIcon
                 ? <CfgIcon size={16} />
                 : <Bot size={16} className="text-gray-400 dark:text-gray-500" />;
-            const group = cfgEntry ? (cfgEntry[1].group || 'Other') : 'Dynamic';
+            const group = cfgEntry ? (cfgEntry[1].group || 'Other') : inferModelGroup(m.name);
 
             result.push({
                 id: m.name,           // 原始模型 name，作为 ID 展示

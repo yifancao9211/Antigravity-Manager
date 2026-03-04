@@ -103,6 +103,7 @@
         "switch_successfully": "一键切换最佳",
         "view_all_accounts": "查看所有账号",
         "export_data": "导出账号数据",
+        "web_quota_summary": "网页版额度总览",
         "for_gemini": "用于 Gemini",
         "for_claude": "用于 Claude",
         "toast": {

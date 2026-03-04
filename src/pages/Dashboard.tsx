@@ -1,5 +1,5 @@
 import { save } from '@tauri-apps/plugin-dialog';
-import { AlertTriangle, ArrowRight, Bot, Download, RefreshCw, Sparkles, Users } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bot, Download, ExternalLink, RefreshCw, Sparkles, Users } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -297,13 +297,38 @@ function Dashboard() {
                 </div>
 
                 {/* 快速链接 */}
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                     <button
                         className="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg p-3 shadow-sm border border-indigo-100 dark:border-indigo-900/30 hover:border-indigo-300 dark:hover:border-indigo-700 hover:shadow-md transition-all flex items-center justify-between group"
                         onClick={() => navigate('/accounts')}
                     >
                         <span className="text-indigo-700 dark:text-indigo-300 font-medium text-sm">{t('dashboard.view_all_accounts')}</span>
                         <ArrowRight className="w-4 h-4 text-indigo-400 dark:text-indigo-500 group-hover:text-indigo-600 dark:group-hover:text-indigo-300 group-hover:translate-x-1 transition-all" />
+                    </button>
+                    <button
+                        className="bg-teal-50 dark:bg-teal-900/20 rounded-lg p-3 shadow-sm border border-teal-100 dark:border-teal-900/30 hover:border-teal-300 dark:hover:border-teal-700 hover:shadow-md transition-all flex items-center justify-between group"
+                        onClick={async () => {
+                            if (isTauri()) {
+                                try {
+                                    const status: any = await invoke('get_proxy_status', {});
+                                    const url = status?.base_url ? `${status.base_url}/api/quota-summary` : 'http://127.0.0.1:8045/api/quota-summary';
+                                    const { openUrl } = await import('@tauri-apps/plugin-opener');
+                                    await openUrl(url);
+                                } catch {
+                                    try {
+                                        const { openUrl } = await import('@tauri-apps/plugin-opener');
+                                        await openUrl('http://127.0.0.1:8045/api/quota-summary');
+                                    } catch (e) {
+                                        console.error('Failed to open URL:', e);
+                                    }
+                                }
+                            } else {
+                                window.open(`${window.location.origin}/api/quota-summary`, '_blank');
+                            }
+                        }}
+                    >
+                        <span className="text-teal-700 dark:text-teal-300 font-medium text-sm">{t('dashboard.web_quota_summary')}</span>
+                        <ExternalLink className="w-4 h-4 text-teal-400 dark:text-teal-500 group-hover:text-teal-600 dark:group-hover:text-teal-300 transition-all" />
                     </button>
                     <button
                         className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-3 shadow-sm border border-purple-100 dark:border-purple-900/30 hover:border-purple-300 dark:hover:border-purple-700 hover:shadow-md transition-all flex items-center justify-between group"

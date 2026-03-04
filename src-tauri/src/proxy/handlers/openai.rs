@@ -91,7 +91,14 @@ pub async fn handle_chat_completions(
         if let Some(items) = input_items {
             for item in items {
                 let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                match item_type {
+                // [FIX] Items with "role" but no "type" field are treated as messages
+                // Cursor sends input items as {role, content} without type: "message"
+                let effective_type = if item_type.is_empty() && item.get("role").is_some() {
+                    "message"
+                } else {
+                    item_type
+                };
+                match effective_type {
                     "message" => {
                         let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user");
                         // content 可能是字符串或数组
@@ -291,12 +298,23 @@ pub async fn handle_chat_completions(
 
         // 4. 获取 Token (使用准确的 request_type)
         // 关键：在重试尝试 (attempt > 0) 时强制轮换账号
+        // [FIX] For OpenAI-native models (gpt-*, o1-*, o3-*, o4-*, chatgpt-*), pass the
+        // original model name so token_manager activates Codex provider affinity correctly.
+        // The mapped_model (Gemini equivalent) would cause is_openai_native_model=false,
+        // filtering out Codex accounts entirely.
+        let token_target_model = if crate::proxy::common::model_mapping::preferred_provider_for_model(&openai_req.model)
+            == Some(crate::models::AccountProvider::Codex)
+        {
+            openai_req.model.clone()
+        } else {
+            mapped_model.clone()
+        };
         let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
             .get_token(
                 &config.request_type,
                 attempt > 0,
                 Some(&session_id),
-                &mapped_model,
+                &token_target_model,
             )
             .await
         {
@@ -412,7 +430,12 @@ pub async fn handle_chat_completions(
                 let openai_body = serde_json::to_value(&openai_req)
                     .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
 
-                let codex_body = convert_to_codex_responses_format(&openai_body);
+                let mut codex_body = convert_to_codex_responses_format(&openai_body);
+                // [FIX] Use mapped_model instead of original model name for Codex upstream
+                // e.g. user sets "codex5.3 -> gpt-5.3-codex", upstream must receive "gpt-5.3-codex"
+                if let Some(obj) = codex_body.as_object_mut() {
+                    obj.insert("model".to_string(), serde_json::Value::String(mapped_model.clone()));
+                }
                 debug!("[Codex] Converted request body: {}", serde_json::to_string(&codex_body).unwrap_or_default());
 
                 let codex_result = match upstream
@@ -1057,11 +1080,32 @@ fn convert_to_codex_responses_format(body: &serde_json::Value) -> serde_json::Va
                 }
                 _ => {
                     // user, assistant, tool messages go to input
-                    // content 可能是字符串或数组（多模态内容），需要保留原始格式
+                    // content 可能是字符串或数组（多模态内容），需要转换为 Codex Responses API 格式
+                    // Chat Completions 用 "text"/"image_url"，Codex Responses API 用 "input_text"/"input_image"
                     let content_val = if let Some(s) = msg.get("content").and_then(|c| c.as_str()) {
                         serde_json::Value::String(s.to_string())
                     } else if let Some(arr) = msg.get("content").and_then(|c| c.as_array()) {
-                        serde_json::Value::Array(arr.clone())
+                        // [FIX] Convert content block types from Chat Completions to Codex Responses API format
+                        let converted: Vec<serde_json::Value> = arr.iter().map(|block| {
+                            let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            match block_type {
+                                "text" => {
+                                    // Chat Completions {type: "text", text: "..."} -> Codex {type: "input_text", text: "..."}
+                                    let text = block.get("text").cloned().unwrap_or(serde_json::Value::String(String::new()));
+                                    serde_json::json!({"type": "input_text", "text": text})
+                                }
+                                "image_url" => {
+                                    // Chat Completions {type: "image_url", image_url: {url: "..."}} -> Codex {type: "input_image", image_url: "..."}
+                                    let url = block.get("image_url")
+                                        .and_then(|v| v.get("url").or(Some(v)))
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+                                    serde_json::json!({"type": "input_image", "image_url": url})
+                                }
+                                _ => block.clone(), // Pass through unknown types as-is
+                            }
+                        }).collect();
+                        serde_json::Value::Array(converted)
                     } else {
                         serde_json::Value::String(String::new())
                     };
@@ -1166,7 +1210,14 @@ pub async fn handle_completions(
         if let Some(items) = input_items {
             for item in items {
                 let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                match item_type {
+                // [FIX] Items with "role" but no "type" field are treated as messages
+                // Cursor sends input items as {role, content} without type: "message"
+                let effective_type = if item_type.is_empty() && item.get("role").is_some() {
+                    "message"
+                } else {
+                    item_type
+                };
+                match effective_type {
                     "message" => {
                         let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user");
                         let content = item.get("content").and_then(|v| v.as_array());
@@ -1521,12 +1572,23 @@ pub async fn handle_completions(
         // 重试时强制轮换，除非只是简单的网络抖动但 Claude 逻辑里 attempt > 0 总是 force_rotate
         let force_rotate = attempt > 0;
 
+        // [FIX] For OpenAI-native models (gpt-*, o1-*, o3-*, o4-*, chatgpt-*), pass the
+        // original model name so token_manager activates Codex provider affinity correctly.
+        // The mapped_model (Gemini equivalent) would cause is_openai_native_model=false,
+        // filtering out Codex accounts entirely.
+        let token_target_model = if crate::proxy::common::model_mapping::preferred_provider_for_model(&openai_req.model)
+            == Some(crate::models::AccountProvider::Codex)
+        {
+            openai_req.model.clone()
+        } else {
+            mapped_model.clone()
+        };
         let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
             .get_token(
                 &config.request_type,
                 force_rotate,
                 session_id,
-                &mapped_model,
+                &token_target_model,
             )
             .await
         {
