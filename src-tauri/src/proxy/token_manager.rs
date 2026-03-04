@@ -1993,9 +1993,13 @@ impl TokenManager {
     /// - `reason`: 限流原因（QuotaExhausted/ServerError 等）
     /// - `model`: 可选的模型名称,用于模型级别限流
     pub fn set_precise_lockout(&self, account_id: &str, reason: crate::proxy::rate_limit::RateLimitReason, model: Option<String>) -> bool {
+        // [FIX #2209] 统一归一化模型名称
+        let normalized_model = model.as_deref().and_then(|m| crate::proxy::common::model_mapping::normalize_to_standard_id(m));
+        let model_to_lock = normalized_model.or(model);
+
         if let Some(reset_time_str) = self.get_quota_reset_time(account_id) {
             tracing::info!("找到账号 {} 的配额刷新时间: {}", account_id, reset_time_str);
-            self.rate_limit_tracker.set_lockout_until_iso(account_id, &reset_time_str, reason, model)
+            self.rate_limit_tracker.set_lockout_until_iso(account_id, &reset_time_str, reason, model_to_lock)
         } else {
             tracing::debug!("未找到账号 {} 的配额刷新时间,将使用默认退避策略", account_id);
             false
@@ -2064,8 +2068,13 @@ impl TokenManager {
                         email,
                         reset_time_str
                     );
+                    
+                    // [FIX #2209] 统一归一化模型名称
+                    let normalized_model = model.as_deref().and_then(|m| crate::proxy::common::model_mapping::normalize_to_standard_id(m));
+                    let model_to_lock = normalized_model.or(model);
+
                     // [FIX] 使用 account_id 作为 key，与 is_rate_limited 检查一致
-                    self.rate_limit_tracker.set_lockout_until_iso(&account_id, reset_time_str, reason, model)
+                    self.rate_limit_tracker.set_lockout_until_iso(&account_id, reset_time_str, reason, model_to_lock)
                 } else {
                     tracing::warn!("账号 {} 配额刷新成功但未找到 reset_time", email);
                     false
@@ -2100,6 +2109,10 @@ impl TokenManager {
         error_body: &str,
         model: Option<&str>, // 🆕 新增模型参数
     ) {
+        // [FIX #2209] 统一归一化模型名称，确保锁定 Key 与负载均衡检查 Key 一致
+        let normalized_model = model.and_then(|m| crate::proxy::common::model_mapping::normalize_to_standard_id(m));
+        let model_to_track = normalized_model.as_deref().or(model);
+
         // [NEW] 检查熔断是否启用
         let config = self.circuit_breaker_config.read().await.clone();
         if !config.enabled {
@@ -2132,7 +2145,7 @@ impl TokenManager {
                 status,
                 retry_after_header,
                 error_body,
-                model.map(|s| s.to_string()),
+                model_to_track.map(|s| s.to_string()),
                 &config.backoff_steps, // [NEW] 传入配置
             );
             return;
@@ -2150,7 +2163,7 @@ impl TokenManager {
         };
 
         // API 未返回 quotaResetDelay,需要实时刷新配额获取精确锁定时间
-        if let Some(m) = model {
+        if let Some(m) = model_to_track {
             tracing::info!(
                 "账号 {} 的模型 {} 的 429 响应未包含 quotaResetDelay,尝试实时刷新配额...",
                 account_id,
@@ -2164,13 +2177,13 @@ impl TokenManager {
         }
 
         // [FIX] 传入 email 而不是 account_id，因为 fetch_and_lock_with_realtime_quota 期望 email
-        if self.fetch_and_lock_with_realtime_quota(email, reason, model.map(|s| s.to_string())).await {
+        if self.fetch_and_lock_with_realtime_quota(email, reason, model_to_track.map(|s| s.to_string())).await {
             tracing::info!("账号 {} 已使用实时配额精确锁定", email);
             return;
         }
 
         // 实时刷新失败,尝试使用本地缓存的配额刷新时间
-        if self.set_precise_lockout(&account_id, reason, model.map(|s| s.to_string())) {
+        if self.set_precise_lockout(&account_id, reason, model_to_track.map(|s| s.to_string())) {
             tracing::info!("账号 {} 已使用本地缓存配额锁定", account_id);
             return;
         }
@@ -2182,7 +2195,7 @@ impl TokenManager {
             status,
             retry_after_header,
             error_body,
-            model.map(|s| s.to_string()),
+            model_to_track.map(|s| s.to_string()),
             &config.backoff_steps, // [NEW] 传入配置
         );
     }
@@ -2445,6 +2458,10 @@ impl TokenManager {
                          if let Some(meta) = detail.get("metadata") {
                              if let Some(v_url) = meta.get("validation_url").and_then(|v| v.as_str()) {
                                  url = Some(v_url.to_string());
+                                 break;
+                             }
+                             if let Some(a_url) = meta.get("appeal_url").and_then(|v| v.as_str()) {
+                                 url = Some(a_url.to_string());
                                  break;
                              }
                          }
@@ -2751,7 +2768,9 @@ mod tests {
             reset_time,
             validation_blocked: false,
             validation_blocked_until: 0,
+            validation_url: None,
             model_quotas: HashMap::new(),
+            model_limits: HashMap::new(),
         }
     }
 
@@ -3007,7 +3026,9 @@ mod tests {
             reset_time: None,
             validation_blocked: false,
             validation_blocked_until: 0,
+            validation_url: None,
             model_quotas: HashMap::new(),
+            model_limits: HashMap::new(),
         }
     }
 
