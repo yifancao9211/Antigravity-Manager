@@ -1508,11 +1508,11 @@ pub async fn fetch_quota_with_retry(account: &mut Account) -> crate::error::AppR
             }
         }
 
-        let mq = |name: &str, display: &str, recommended: bool| -> crate::models::quota::ModelQuota {
+        let mq = |name: &str, display: &str, recommended: bool, percentage: i32, reset_time: String| -> crate::models::quota::ModelQuota {
             crate::models::quota::ModelQuota {
                 name: name.to_string(),
-                percentage: 100,
-                reset_time: String::new(),
+                percentage,
+                reset_time,
                 display_name: Some(display.to_string()),
                 supports_images: Some(false),
                 supports_thinking: Some(true),
@@ -1523,20 +1523,63 @@ pub async fn fetch_quota_with_retry(account: &mut Account) -> crate::error::AppR
                 supported_mime_types: None,
             }
         };
+
+        // Fetch real usage data from ChatGPT backend-api wham/usage
+        // Returns two window quotas: 5h (primary) and 7d (secondary)
+        let (primary_pct, primary_reset, secondary_pct, secondary_reset, plan_type) = match crate::modules::codex_oauth::fetch_codex_wham_usage(&fresh_token).await {
+            Ok(usage) => {
+                let limit_reached = usage.rate_limit.as_ref()
+                    .map(|rl| rl.limit_reached.unwrap_or(false))
+                    .unwrap_or(false);
+
+                let calc_remaining = |window: Option<&crate::modules::codex_oauth::WhamWindow>| -> i32 {
+                    if limit_reached { return 0; }
+                    window
+                        .and_then(|w| w.used_percent)
+                        .map(|used| (100.0 - used).max(0.0).min(100.0) as i32)
+                        .unwrap_or(100)
+                };
+
+                let calc_reset = |window: Option<&crate::modules::codex_oauth::WhamWindow>| -> String {
+                    window
+                        .and_then(|w| w.reset_at)
+                        .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                        .unwrap_or_default()
+                };
+
+                let p_pct = calc_remaining(usage.rate_limit.as_ref().and_then(|rl| rl.primary_window.as_ref()));
+                let p_reset = calc_reset(usage.rate_limit.as_ref().and_then(|rl| rl.primary_window.as_ref()));
+                let s_pct = calc_remaining(usage.rate_limit.as_ref().and_then(|rl| rl.secondary_window.as_ref()));
+                let s_reset = calc_reset(usage.rate_limit.as_ref().and_then(|rl| rl.secondary_window.as_ref()));
+
+                let plan = usage.plan_type.unwrap_or_else(|| "Codex".to_string());
+                tracing::info!("Codex wham/usage for {}: 5h={}% (reset {}), 7d={}% (reset {}), plan={}",
+                    account.email, p_pct, p_reset, s_pct, s_reset, plan);
+                (p_pct, p_reset, s_pct, s_reset, plan)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to fetch Codex wham/usage for {}: {}, using defaults", account.email, e);
+                (100, String::new(), 100, String::new(), "Codex".to_string())
+            }
+        };
+
         let codex_models = vec![
-            mq("gpt-5.3-codex", "GPT-5.3 Codex", true),
-            mq("gpt-5.2-codex", "GPT-5.2 Codex", false),
-            mq("gpt-5.2", "GPT-5.2", false),
-            mq("gpt-5.1-codex", "GPT-5.1 Codex", false),
-            mq("gpt-5.1-codex-max", "GPT-5.1 Codex Max", false),
-            mq("gpt-5.1-codex-mini", "GPT-5.1 Codex Mini", false),
+            mq("codex-5h", "Codex 5h", true, primary_pct, primary_reset),
+            mq("codex-7d", "Codex 7d", false, secondary_pct, secondary_reset),
         ];
+        let tier_label = match plan_type.as_str() {
+            "plus" => "Codex Plus",
+            "pro" => "Codex Pro",
+            "free" => "Codex Free",
+            _ => "Codex",
+        };
         let quota = QuotaData {
             models: codex_models,
             last_updated: chrono::Utc::now().timestamp(),
             is_forbidden: false,
             forbidden_reason: None,
-            subscription_tier: Some("Codex".to_string()),
+            subscription_tier: Some(tier_label.to_string()),
             model_forwarding_rules: std::collections::HashMap::new(),
         };
         return Ok(quota);

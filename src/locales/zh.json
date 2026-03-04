@@ -240,7 +240,9 @@
         "details": {
             "title": "配额详情",
             "model_quota": "模型配额",
-            "protected_models": "受保护模型"
+            "protected_models": "受保护模型",
+            "shared_quota": "共享额度",
+            "models": "个模型"
         },
         "toast": {
             "proxy_enabled": "成功启用 {{count}} 个账号的反代功能",

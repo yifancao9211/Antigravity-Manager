@@ -243,7 +243,9 @@
         "details": {
             "title": "Quota Details",
             "model_quota": "Model Quota",
-            "protected_models": "Protected Models"
+            "protected_models": "Protected Models",
+            "shared_quota": "Shared Quota",
+            "models": "models"
         },
         "toast": {
             "proxy_enabled": "Enabled proxy for {{count}} accounts",

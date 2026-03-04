@@ -234,21 +234,48 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
 
             {/* 配额展示 */}
             <div className="flex-1 px-2 mb-2 overflow-y-auto scrollbar-none">
-                {account.provider === 'codex' ? (
-                    <div className="flex items-center justify-center h-full py-4">
-                        {account.proxy_disabled ? (
-                            <span className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 text-[11px] font-bold border border-red-200 dark:border-red-800/50">
-                                <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0 animate-pulse" />
-                                Codex - {t('accounts.rate_limited')}
-                            </span>
-                        ) : (
-                            <span className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 text-[11px] font-bold border border-emerald-200 dark:border-emerald-800/50">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                                Codex - {t('accounts.active')}
-                            </span>
-                        )}
-                    </div>
-                ) : isDisabled || account.quota?.is_forbidden || account.proxy_disabled || account.validation_blocked ? (
+                {account.provider === 'codex' ? (() => {
+                    const models = account.quota?.models || [];
+                    const w5h = models.find(m => m.name === 'codex-5h');
+                    const w7d = models.find(m => m.name === 'codex-7d');
+                    const isLimited = account.proxy_disabled;
+                    const getBarColor = (pct: number) => pct >= 50 ? 'bg-emerald-500' : pct >= 20 ? 'bg-amber-400' : 'bg-red-500';
+                    const getPctColor = (pct: number) => pct >= 50 ? 'text-emerald-600 dark:text-emerald-400' : pct >= 20 ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400';
+
+                    const renderWindow = (label: string, model: typeof w5h) => {
+                        const pct = model?.percentage ?? 100;
+                        return (
+                            <div className="flex flex-col gap-1">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-[10px] font-bold text-gray-500 dark:text-gray-400">{label}</span>
+                                    <span className={`text-[11px] font-mono font-bold ${getPctColor(pct)}`}>{pct}%</span>
+                                </div>
+                                <div className="h-1.5 w-full bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden">
+                                    <div className={`h-full rounded-full transition-all duration-500 ${getBarColor(pct)}`} style={{ width: `${pct}%` }} />
+                                </div>
+                                {model?.reset_time && (
+                                    <span className="text-[9px] text-gray-400 dark:text-gray-500 font-mono flex items-center gap-0.5">
+                                        <Clock className="w-2 h-2" />
+                                        {model.reset_time}
+                                    </span>
+                                )}
+                            </div>
+                        );
+                    };
+
+                    return (
+                        <div className="flex flex-col gap-2 py-2">
+                            {isLimited && (
+                                <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 text-red-700 dark:text-red-400 text-[10px] font-bold self-center">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0 animate-pulse" />
+                                    {t('accounts.rate_limited')}
+                                </div>
+                            )}
+                            {renderWindow('5h', w5h)}
+                            {renderWindow('7d', w7d)}
+                        </div>
+                    );
+                })() : isDisabled || account.quota?.is_forbidden || account.proxy_disabled || account.validation_blocked ? (
                     <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 h-full py-4 text-center">
                         <div className={cn(
                             "flex items-center gap-1.5",

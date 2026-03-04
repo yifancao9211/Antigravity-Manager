@@ -529,7 +529,40 @@ function AccountRowContent({
 
             {/* 模型配额列 */}
             <td className="px-2 py-1 align-middle">
-                {isDisabled || account.quota?.is_forbidden || account.validation_blocked ? (
+                {account.provider === 'codex' ? (() => {
+                    const models = account.quota?.models || [];
+                    const w5h = models.find(m => m.name === 'codex-5h');
+                    const w7d = models.find(m => m.name === 'codex-7d');
+                    const isLimited = account.proxy_disabled;
+                    const getPctColor = (pct: number) => pct >= 50 ? 'text-emerald-600 dark:text-emerald-400' : pct >= 20 ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400';
+                    const getBarCol = (pct: number) => pct >= 50 ? 'bg-emerald-500' : pct >= 20 ? 'bg-amber-400' : 'bg-red-500';
+                    const p5 = w5h?.percentage ?? 100;
+                    const p7 = w7d?.percentage ?? 100;
+                    return (
+                        <div className="flex flex-col gap-1 py-0.5">
+                            {isLimited && (
+                                <span className="text-[9px] font-bold text-red-600 dark:text-red-400 flex items-center gap-1">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                                    {t('accounts.rate_limited')}
+                                </span>
+                            )}
+                            <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-bold text-gray-500 dark:text-gray-400 w-[20px]">5h</span>
+                                <div className="flex-1 h-[6px] bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden max-w-[80px]">
+                                    <div className={`h-full rounded-full ${getBarCol(p5)}`} style={{ width: `${p5}%` }} />
+                                </div>
+                                <span className={`text-[10px] font-mono font-bold w-[32px] text-right ${getPctColor(p5)}`}>{p5}%</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-bold text-gray-500 dark:text-gray-400 w-[20px]">7d</span>
+                                <div className="flex-1 h-[6px] bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden max-w-[80px]">
+                                    <div className={`h-full rounded-full ${getBarCol(p7)}`} style={{ width: `${p7}%` }} />
+                                </div>
+                                <span className={`text-[10px] font-mono font-bold w-[32px] text-right ${getPctColor(p7)}`}>{p7}%</span>
+                            </div>
+                        </div>
+                    );
+                })() : isDisabled || account.quota?.is_forbidden || account.validation_blocked ? (
                     <div className={cn(
                         "flex items-center justify-center gap-3 py-1.5 px-4 rounded-xl border group/error",
                         account.validation_blocked ? "bg-amber-50/50 dark:bg-amber-900/10 border-amber-100/50 dark:border-amber-900/20" : "bg-red-50/50 dark:bg-red-900/10 border-red-100/50 dark:border-red-900/20"

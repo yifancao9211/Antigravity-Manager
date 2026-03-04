@@ -85,9 +85,50 @@ export default function AccountDetailsDialog({ account, onClose }: AccountDetail
                     <h4 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3">{t('accounts.details.model_quota')}</h4>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {(() => {
+                            const models = account.quota?.models || [];
+
+                            // Codex: shared quota pool — show 5h and 7d windows
+                            if (account.provider === 'codex' && models.length > 0) {
+                                const w5h = models.find(m => m.name === 'codex-5h');
+                                const w7d = models.find(m => m.name === 'codex-7d');
+                                const getPctClass = (pct: number) => pct >= 50 ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
+                                    pct >= 20 ? 'bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400' :
+                                    'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400';
+                                const getBarColor = (pct: number) => pct >= 50 ? 'bg-emerald-500' : pct >= 20 ? 'bg-orange-400' : 'bg-red-500';
+
+                                const renderWindowCard = (label: string, model: typeof w5h) => {
+                                    const pct = model?.percentage ?? 100;
+                                    return (
+                                        <div key={label} className="p-4 rounded-xl border border-emerald-100 dark:border-emerald-900/40 bg-emerald-50/30 dark:bg-emerald-900/10 hover:shadow-sm transition-all">
+                                            <div className="flex justify-between items-center mb-3">
+                                                <span className="text-sm font-bold text-emerald-700 dark:text-emerald-400">
+                                                    Codex {label}
+                                                </span>
+                                                <span className={`text-sm font-bold px-2.5 py-1 rounded-md ${getPctClass(pct)}`}>
+                                                    {pct}%
+                                                </span>
+                                            </div>
+                                            <div className="h-2 w-full bg-gray-100 dark:bg-base-200 rounded-full overflow-hidden mb-3">
+                                                <div className={`h-full rounded-full transition-all duration-500 ${getBarColor(pct)}`} style={{ width: `${pct}%` }} />
+                                            </div>
+                                            <div className="flex items-center gap-1.5 text-[10px] text-gray-400 dark:text-gray-500 font-mono">
+                                                <Clock size={10} />
+                                                <span>{t('accounts.reset_time')}: {formatDate(model?.reset_time) || t('common.unknown')}</span>
+                                            </div>
+                                        </div>
+                                    );
+                                };
+
+                                return [
+                                    renderWindowCard('5h', w5h),
+                                    renderWindowCard('7d', w7d),
+                                ];
+                            }
+
+                            // Google accounts: per-model cards
                             const uniqueLabels = new Set<string>();
                             return sortModels(
-                                (account.quota?.models || []).map(model => {
+                                models.map(model => {
                                     const config = MODEL_CONFIG[model.name.toLowerCase()];
                                     const label = model.display_name || (config?.i18nKey ? t(config.i18nKey) : (config?.label || model.name));
                                     return {

@@ -246,6 +246,54 @@ pub async fn import_from_codex_auth_file() -> Result<TokenData, String> {
     import_from_codex_auth_file_path(&auth_path).await
 }
 
+// ChatGPT backend-api for Codex usage/quota
+const CODEX_WHAM_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+
+/// Codex wham/usage API response structures
+#[derive(Debug, Deserialize)]
+pub struct WhamUsageResponse {
+    pub plan_type: Option<String>,
+    pub rate_limit: Option<WhamRateLimit>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WhamRateLimit {
+    pub allowed: Option<bool>,
+    pub limit_reached: Option<bool>,
+    pub primary_window: Option<WhamWindow>,
+    pub secondary_window: Option<WhamWindow>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WhamWindow {
+    pub used_percent: Option<f64>,
+    pub limit_window_seconds: Option<i64>,
+    pub reset_after_seconds: Option<i64>,
+    pub reset_at: Option<i64>,
+}
+
+/// Fetch Codex usage/quota from ChatGPT backend-api
+pub async fn fetch_codex_wham_usage(access_token: &str) -> Result<WhamUsageResponse, String> {
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(CODEX_WHAM_USAGE_URL)
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|e| format!("Codex wham/usage request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Codex wham/usage HTTP {}: {}", status, body));
+    }
+
+    resp.json::<WhamUsageResponse>()
+        .await
+        .map_err(|e| format!("Failed to parse Codex wham/usage response: {}", e))
+}
+
 /// Check if a Codex token needs refresh and refresh it if needed
 /// Returns Some(new_token) if refreshed, None if no update needed
 pub async fn ensure_codex_fresh_token(token: &TokenData) -> Result<Option<TokenData>, String> {

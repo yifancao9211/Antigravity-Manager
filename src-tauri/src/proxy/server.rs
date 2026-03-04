@@ -676,6 +676,7 @@ impl AxumServer {
             .merge(proxy_routes)
             // 公开路由 (无需鉴权)
             .route("/auth/callback", get(handle_oauth_callback))
+            .route("/api/quota-summary", get(admin_quota_summary_text))
             // 应用全局监控与状态层 (外层)
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
@@ -3499,4 +3500,290 @@ async fn admin_get_droid_config_content(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse { error: e }),
         ))
+}
+
+/// Quota summary as HTML — optimized for large account lists
+async fn admin_quota_summary_text(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let accounts = state.account_service.list_accounts().map_err(|e| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse { error: e }),
+    ))?;
+    let current_id = state.account_service.get_current_id().ok().flatten();
+
+    let total = accounts.len();
+    let mut codex_count = 0usize;
+    let mut google_count = 0usize;
+    let mut active_count = 0usize;
+    let mut warn_count = 0usize;
+
+    let mut cards_html = String::new();
+
+    for acc in &accounts {
+        let is_current = current_id.as_ref().map(|id| id == &acc.id).unwrap_or(false);
+        let masked = mask_email(&acc.email);
+
+        let provider = match acc.provider {
+            crate::models::AccountProvider::Codex => { codex_count += 1; "Codex" },
+            crate::models::AccountProvider::Google => { google_count += 1; "Google" },
+        };
+        let provider_lower = provider.to_lowercase();
+
+        // Compute min quota percentage for summary stats
+        let min_pct = acc.quota.as_ref()
+            .map(|q| q.models.iter().map(|m| m.percentage).min().unwrap_or(100))
+            .unwrap_or(100);
+
+        if acc.disabled || acc.proxy_disabled || acc.quota.as_ref().map(|q| q.is_forbidden).unwrap_or(false) {
+            warn_count += 1;
+        } else {
+            active_count += 1;
+        }
+
+        // Status badges
+        let mut badges = String::new();
+        if is_current {
+            badges.push_str(r#"<span class="badge current">CURRENT</span>"#);
+        }
+        if acc.disabled {
+            badges.push_str(r#"<span class="badge disabled">DISABLED</span>"#);
+        }
+        if acc.proxy_disabled {
+            badges.push_str(r#"<span class="badge proxy-off">PROXY OFF</span>"#);
+        }
+        if let Some(ref q) = acc.quota {
+            if q.is_forbidden {
+                badges.push_str(r#"<span class="badge forbidden">FORBIDDEN</span>"#);
+            }
+        }
+
+        let provider_class = &provider_lower;
+
+        let tier = acc.quota.as_ref()
+            .and_then(|q| q.subscription_tier.as_deref())
+            .unwrap_or("-");
+
+        // Build model rows
+        let mut models_html = String::new();
+        if let Some(ref q) = acc.quota {
+            if q.models.is_empty() {
+                models_html.push_str(r#"<div class="no-data">No quota data</div>"#);
+            } else {
+                models_html.push_str(r#"<div class="models-grid">"#);
+                for m in &q.models {
+                    let display = m.display_name.as_deref().unwrap_or(&m.name);
+                    let pct = m.percentage;
+                    let bar_color = if pct >= 50 { "#10b981" } else if pct >= 20 { "#f59e0b" } else { "#ef4444" };
+                    let pct_class = if pct >= 50 { "pct-good" } else if pct >= 20 { "pct-warn" } else { "pct-bad" };
+                    let reset = if m.reset_time.is_empty() { "-" } else { &m.reset_time };
+                    models_html.push_str(&format!(
+                        r#"<div class="model-row">
+                            <span class="model-name">{}</span>
+                            <div class="bar-wrap"><div class="bar-fill" style="width:{}%;background:{}"></div></div>
+                            <span class="model-pct {}">{}%</span>
+                            <span class="model-reset">{}</span>
+                        </div>"#,
+                        display, pct, bar_color, pct_class, pct, reset
+                    ));
+                }
+                models_html.push_str("</div>");
+            }
+        } else {
+            models_html.push_str(r#"<div class="no-data">No quota data</div>"#);
+        }
+
+        let card_border = if is_current { "border-left:3px solid #3b82f6;" } else { "" };
+
+        // Mini quota pill for collapsed view
+        let mini_pct_class = if min_pct >= 50 { "pct-good" } else if min_pct >= 20 { "pct-warn" } else { "pct-bad" };
+
+        cards_html.push_str(&format!(
+            r#"<div class="card" style="{}" data-provider="{}" data-email="{}">
+                <div class="card-header" onclick="toggleCard(this)">
+                    <span class="toggle-icon">▶</span>
+                    <div class="email">{}</div>
+                    <span class="badge provider-{}">{}</span>
+                    <span class="badge tier">{}</span>
+                    {}
+                    <span class="mini-pct {}">{}%</span>
+                </div>
+                <div class="card-body">
+                    {}
+                </div>
+            </div>"#,
+            card_border, provider_lower, masked.to_lowercase(),
+            masked, provider_class, provider, tier, badges,
+            mini_pct_class, min_pct,
+            models_html
+        ));
+    }
+
+    let html = format!(r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quota Summary</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:system-ui,-apple-system,sans-serif;background:#f3f4f6;color:#1f2937;padding:0;margin:0}}
+.container{{max-width:960px;margin:0 auto;padding:16px 20px 40px}}
+.toolbar{{position:sticky;top:0;z-index:10;background:#f3f4f6;padding:12px 0 8px;border-bottom:1px solid #e5e7eb;margin-bottom:12px}}
+.toolbar-row{{display:flex;align-items:center;gap:8px;flex-wrap:wrap}}
+.search{{flex:1;min-width:180px;padding:6px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:.85rem;background:#fff;outline:none}}
+.search:focus{{border-color:#3b82f6;box-shadow:0 0 0 2px rgba(59,130,246,.15)}}
+.filter-btn{{padding:4px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:.75rem;font-weight:600;background:#fff;cursor:pointer;transition:all .15s}}
+.filter-btn:hover{{background:#f9fafb}}
+.filter-btn.active{{background:#3b82f6;color:#fff;border-color:#3b82f6}}
+.bulk-btn{{padding:4px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:.7rem;font-weight:500;background:#fff;cursor:pointer;color:#6b7280}}
+.bulk-btn:hover{{background:#f9fafb}}
+.stats-bar{{display:flex;gap:16px;padding:8px 0;font-size:.75rem;color:#6b7280}}
+.stats-bar b{{color:#1f2937}}
+.card{{background:#fff;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;box-shadow:0 1px 2px rgba(0,0,0,.04);overflow:hidden}}
+.card.hidden{{display:none}}
+.card-header{{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:10px 14px;cursor:pointer;user-select:none}}
+.card-header:hover{{background:#f9fafb}}
+.toggle-icon{{font-size:.6rem;color:#9ca3af;transition:transform .2s;width:12px;text-align:center;flex-shrink:0}}
+.card.open .toggle-icon{{transform:rotate(90deg)}}
+.card-body{{display:none;padding:4px 14px 12px 30px;border-top:1px solid #f3f4f6}}
+.card.open .card-body{{display:block}}
+.email{{font-weight:600;font-size:.8rem;font-family:ui-monospace,monospace;color:#111827}}
+.badge{{display:inline-block;padding:1px 7px;border-radius:5px;font-size:.6rem;font-weight:700;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}}
+.badge.current{{background:#dbeafe;color:#1d4ed8}}
+.badge.disabled{{background:#fee2e2;color:#dc2626}}
+.badge.proxy-off{{background:#ffedd5;color:#ea580c}}
+.badge.forbidden{{background:#fecaca;color:#b91c1c}}
+.badge.tier{{background:#f3f4f6;color:#4b5563;border:1px solid #d1d5db}}
+.badge.provider-codex{{background:#d1fae5;color:#059669}}
+.badge.provider-google{{background:#dbeafe;color:#2563eb}}
+.mini-pct{{margin-left:auto;font-size:.75rem;font-weight:700;font-family:ui-monospace,monospace;flex-shrink:0}}
+.card.open .mini-pct{{display:none}}
+.models-grid{{display:grid;gap:4px}}
+.model-row{{display:grid;grid-template-columns:1fr 100px 42px 1fr;align-items:center;gap:6px;padding:2px 0}}
+.model-name{{font-size:.75rem;font-weight:500;color:#374151;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.bar-wrap{{height:6px;background:#e5e7eb;border-radius:99px;overflow:hidden}}
+.bar-fill{{height:100%;border-radius:99px;transition:width .3s}}
+.model-pct{{font-size:.7rem;font-weight:700;font-family:ui-monospace,monospace;text-align:right}}
+.pct-good{{color:#059669}}
+.pct-warn{{color:#d97706}}
+.pct-bad{{color:#dc2626}}
+.model-reset{{font-size:.6rem;color:#9ca3af;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.no-data{{color:#9ca3af;font-size:.75rem;padding:6px 0}}
+.empty-state{{text-align:center;padding:40px;color:#9ca3af;font-size:.85rem}}
+.footer{{text-align:center;padding:12px;color:#9ca3af;font-size:.65rem}}
+@media(max-width:640px){{
+  .model-row{{grid-template-columns:1fr 70px 36px}}
+  .model-reset{{display:none}}
+  .stats-bar{{flex-wrap:wrap;gap:8px}}
+}}
+@media(prefers-color-scheme:dark){{
+  body,.toolbar{{background:#111827;color:#f3f4f6}}
+  .toolbar{{border-color:#374151}}
+  .card{{background:#1f2937;border-color:#374151}}
+  .card-header:hover{{background:#263042}}
+  .card-body{{border-color:#374151}}
+  .email{{color:#f9fafb}}
+  .model-name{{color:#d1d5db}}
+  .bar-wrap{{background:#374151}}
+  .badge.tier{{background:#374151;color:#9ca3af;border-color:#4b5563}}
+  .search{{background:#1f2937;border-color:#4b5563;color:#f3f4f6}}
+  .search:focus{{border-color:#3b82f6}}
+  .filter-btn{{background:#1f2937;border-color:#4b5563;color:#d1d5db}}
+  .filter-btn:hover{{background:#263042}}
+  .filter-btn.active{{background:#3b82f6;color:#fff;border-color:#3b82f6}}
+  .bulk-btn{{background:#1f2937;border-color:#4b5563;color:#9ca3af}}
+  .bulk-btn:hover{{background:#263042}}
+  .stats-bar b{{color:#e5e7eb}}
+  .stats-bar{{color:#9ca3af}}
+}}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="toolbar">
+  <div class="toolbar-row">
+    <input type="text" class="search" id="search" placeholder="Search email..." oninput="applyFilter()">
+    <button class="filter-btn active" data-filter="all" onclick="setFilter('all',this)">All ({})</button>
+    <button class="filter-btn" data-filter="google" onclick="setFilter('google',this)">Google ({})</button>
+    <button class="filter-btn" data-filter="codex" onclick="setFilter('codex',this)">Codex ({})</button>
+    <button class="bulk-btn" onclick="toggleAll(true)">Expand All</button>
+    <button class="bulk-btn" onclick="toggleAll(false)">Collapse All</button>
+  </div>
+  <div class="stats-bar">
+    <span>Total: <b>{}</b></span>
+    <span>Active: <b>{}</b></span>
+    <span>Issues: <b style="color:{}">{}</b></span>
+    <span id="shown-count"></span>
+  </div>
+</div>
+<div id="cards">{}</div>
+<div class="empty-state" id="empty" style="display:none">No accounts match your filter.</div>
+<div class="footer">Antigravity Manager v{}</div>
+</div>
+<script>
+var currentFilter='all';
+function setFilter(f,btn){{
+  currentFilter=f;
+  document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  applyFilter();
+}}
+function applyFilter(){{
+  var q=document.getElementById('search').value.toLowerCase();
+  var cards=document.querySelectorAll('.card');
+  var shown=0;
+  cards.forEach(function(c){{
+    var prov=c.getAttribute('data-provider');
+    var email=c.getAttribute('data-email');
+    var matchProv=(currentFilter==='all'||prov===currentFilter);
+    var matchSearch=(!q||email.indexOf(q)!==-1);
+    if(matchProv&&matchSearch){{c.classList.remove('hidden');shown++}}
+    else{{c.classList.add('hidden')}}
+  }});
+  document.getElementById('empty').style.display=shown===0?'block':'none';
+  document.getElementById('shown-count').innerHTML='Showing: <b>'+shown+'</b>';
+}}
+function toggleCard(hdr){{
+  hdr.parentElement.classList.toggle('open');
+}}
+function toggleAll(open){{
+  document.querySelectorAll('.card:not(.hidden)').forEach(function(c){{
+    if(open)c.classList.add('open');else c.classList.remove('open');
+  }});
+}}
+// Auto-expand all if total <= 10
+if(document.querySelectorAll('.card').length<=10){{
+  toggleAll(true);
+}}
+applyFilter();
+</script>
+</body>
+</html>"##,
+        total, google_count, codex_count,
+        total, active_count,
+        if warn_count > 0 { "#dc2626" } else { "inherit" }, warn_count,
+        cards_html,
+        env!("CARGO_PKG_VERSION"),
+    );
+
+    Ok(Html(html))
+}
+
+/// Mask email: "someone@example.com" -> "so***ne@example.com"
+fn mask_email(email: &str) -> String {
+    if let Some(at) = email.find('@') {
+        let local = &email[..at];
+        let domain = &email[at..];
+        if local.len() <= 3 {
+            // Too short to mask meaningfully
+            format!("{}***{}", &local[..1], domain)
+        } else {
+            let prefix = &local[..2];
+            let suffix = &local[local.len() - 2..];
+            format!("{}***{}{}", prefix, suffix, domain)
+        }
+    } else {
+        "***".to_string()
+    }
 }

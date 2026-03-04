@@ -41,53 +41,161 @@ pub async fn handle_chat_completions(
     // 这确保了即使结构体定义遗漏字段，日志也能完整记录所有参数
     let original_body = body.clone();
 
-    // [NEW] 自动检测并转换 Responses 格式
-    // 如果请求包含 instructions 或 input 但没有 messages，则认为是 Responses 格式
+    // [FIX] 自动检测并转换 Responses API 格式为 Chat Completions 格式
+    // Responses 格式特征: 有 instructions/input 字段，无 messages 字段
     let is_responses_format = !body.get("messages").is_some()
         && (body.get("instructions").is_some() || body.get("input").is_some());
 
     if is_responses_format {
         debug!("Detected Responses API format, converting to Chat Completions format");
 
-        // 转换 instructions 为 system message
+        let mut messages: Vec<Value> = Vec::new();
+
+        // 1. 转换 instructions 为 system message
         if let Some(instructions) = body.get("instructions").and_then(|v| v.as_str()) {
             if !instructions.is_empty() {
-                let system_msg = json!({
-                    "role": "system",
-                    "content": instructions
-                });
+                messages.push(json!({ "role": "system", "content": instructions }));
+            }
+        }
 
-                // 初始化 messages 数组
-                if !body.get("messages").is_some() {
-                    body["messages"] = json!([]);
-                }
+        // 2. 两遍扫描 input 数组
+        let input_items = body.get("input").and_then(|v| v.as_array());
 
-                // 将 system message 插入到开头
-                if let Some(messages) = body.get_mut("messages").and_then(|v| v.as_array_mut()) {
-                    messages.insert(0, system_msg);
+        // Pass 1: 构建 call_id -> name 映射表（用于 function_call_output）
+        let mut call_id_to_name = std::collections::HashMap::new();
+        if let Some(items) = input_items {
+            for item in items {
+                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                match item_type {
+                    "function_call" | "local_shell_call" | "web_search_call" => {
+                        let call_id = item
+                            .get("call_id")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| item.get("id").and_then(|v| v.as_str()))
+                            .unwrap_or("unknown");
+                        let name = if item_type == "local_shell_call" {
+                            "shell"
+                        } else if item_type == "web_search_call" {
+                            "google_search"
+                        } else {
+                            item.get("name").and_then(|v| v.as_str()).unwrap_or("unknown")
+                        };
+                        call_id_to_name.insert(call_id.to_string(), name.to_string());
+                    }
+                    _ => {}
                 }
             }
         }
 
-        // 转换 input 为 user message（如果存在）
-        if let Some(input) = body.get("input") {
-            let user_msg = if input.is_string() {
-                json!({
-                    "role": "user",
-                    "content": input.as_str().unwrap_or("")
-                })
-            } else {
-                // input 是数组格式，暂时简化处理
-                json!({
-                    "role": "user",
-                    "content": input.to_string()
-                })
-            };
+        // Pass 2: 逐项转换 input items 为 Chat Completions messages
+        if let Some(items) = input_items {
+            for item in items {
+                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                match item_type {
+                    "message" => {
+                        let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+                        // content 可能是字符串或数组
+                        if let Some(content_str) = item.get("content").and_then(|v| v.as_str()) {
+                            messages.push(json!({ "role": role, "content": content_str }));
+                        } else if let Some(parts) = item.get("content").and_then(|v| v.as_array()) {
+                            let mut text_parts = Vec::new();
+                            let mut image_parts: Vec<Value> = Vec::new();
+                            for part in parts {
+                                if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                                    text_parts.push(text.to_string());
+                                } else if part.get("type").and_then(|v| v.as_str()) == Some("input_text") {
+                                    if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                                        text_parts.push(text.to_string());
+                                    }
+                                } else if part.get("type").and_then(|v| v.as_str()) == Some("input_image") {
+                                    if let Some(image_url) = part.get("image_url").and_then(|v| v.as_str()) {
+                                        image_parts.push(json!({"type": "image_url", "image_url": { "url": image_url }}));
+                                    }
+                                } else if part.get("type").and_then(|v| v.as_str()) == Some("image_url") {
+                                    if let Some(url_obj) = part.get("image_url") {
+                                        image_parts.push(json!({"type": "image_url", "image_url": url_obj.clone()}));
+                                    }
+                                }
+                            }
+                            if image_parts.is_empty() {
+                                messages.push(json!({ "role": role, "content": text_parts.join("\n") }));
+                            } else {
+                                let mut content_blocks: Vec<Value> = Vec::new();
+                                if !text_parts.is_empty() {
+                                    content_blocks.push(json!({"type": "text", "text": text_parts.join("\n")}));
+                                }
+                                content_blocks.extend(image_parts);
+                                messages.push(json!({ "role": role, "content": content_blocks }));
+                            }
+                        }
+                    }
+                    "function_call" | "local_shell_call" | "web_search_call" => {
+                        let mut name = item.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        let mut args_str = item.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}").to_string();
+                        let call_id = item.get("call_id").and_then(|v| v.as_str())
+                            .or_else(|| item.get("id").and_then(|v| v.as_str()))
+                            .unwrap_or("unknown");
 
-            if let Some(messages) = body.get_mut("messages").and_then(|v| v.as_array_mut()) {
-                messages.push(user_msg);
+                        if item_type == "local_shell_call" {
+                            name = "shell";
+                            if let Some(action) = item.get("action") {
+                                if let Some(exec) = action.get("exec") {
+                                    let mut args_obj = serde_json::Map::new();
+                                    if let Some(cmd) = exec.get("command") {
+                                        let cmd_val = if cmd.is_string() { json!([cmd]) } else { cmd.clone() };
+                                        args_obj.insert("command".to_string(), cmd_val);
+                                    }
+                                    if let Some(timeout) = exec.get("timeout_ms") {
+                                        args_obj.insert("timeout".to_string(), timeout.clone());
+                                    }
+                                    args_str = serde_json::to_string(&args_obj).unwrap_or_default();
+                                }
+                            }
+                        } else if item_type == "web_search_call" {
+                            name = "google_search";
+                            let mut args_obj = serde_json::Map::new();
+                            if let Some(query) = item.get("query").and_then(|v| v.as_str()) {
+                                args_obj.insert("query".to_string(), json!(query));
+                            }
+                            args_str = serde_json::to_string(&args_obj).unwrap_or_default();
+                        }
+
+                        messages.push(json!({
+                            "role": "assistant",
+                            "content": serde_json::Value::Null,
+                            "tool_calls": [{
+                                "id": call_id,
+                                "type": "function",
+                                "function": { "name": name, "arguments": args_str }
+                            }]
+                        }));
+                    }
+                    "function_call_output" => {
+                        let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        let output = item.get("output").and_then(|v| v.as_str()).unwrap_or("");
+                        messages.push(json!({
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "content": output
+                        }));
+                    }
+                    _ => {
+                        debug!("Skipping unknown Responses API input type: {}", item_type);
+                    }
+                }
             }
         }
+
+        // 如果 input 是单独的字符串（非数组），作为 user message
+        if input_items.is_none() {
+            if let Some(input_str) = body.get("input").and_then(|v| v.as_str()) {
+                if !input_str.is_empty() {
+                    messages.push(json!({ "role": "user", "content": input_str }));
+                }
+            }
+        }
+
+        body["messages"] = json!(messages);
     }
 
     let mut openai_req: OpenAIRequest = serde_json::from_value(body)
@@ -940,18 +1048,39 @@ fn convert_to_codex_responses_format(body: &serde_json::Value) -> serde_json::Va
 
         for msg in messages {
             let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
-            let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
 
             match role {
                 "system" | "developer" => {
+                    // system/developer content 始终是字符串
+                    let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
                     instructions_parts.push(content.to_string());
                 }
                 _ => {
                     // user, assistant, tool messages go to input
-                    input_parts.push(serde_json::json!({
+                    // content 可能是字符串或数组（多模态内容），需要保留原始格式
+                    let content_val = if let Some(s) = msg.get("content").and_then(|c| c.as_str()) {
+                        serde_json::Value::String(s.to_string())
+                    } else if let Some(arr) = msg.get("content").and_then(|c| c.as_array()) {
+                        serde_json::Value::Array(arr.clone())
+                    } else {
+                        serde_json::Value::String(String::new())
+                    };
+
+                    let mut input_msg = serde_json::json!({
                         "role": role,
-                        "content": content,
-                    }));
+                        "content": content_val,
+                    });
+
+                    // 保留 tool_calls（assistant 消息可能包含）
+                    if let Some(tool_calls) = msg.get("tool_calls") {
+                        input_msg["tool_calls"] = tool_calls.clone();
+                    }
+                    // 保留 tool_call_id（tool 消息需要）
+                    if let Some(tool_call_id) = msg.get("tool_call_id") {
+                        input_msg["tool_call_id"] = tool_call_id.clone();
+                    }
+
+                    input_parts.push(input_msg);
                 }
             }
         }
