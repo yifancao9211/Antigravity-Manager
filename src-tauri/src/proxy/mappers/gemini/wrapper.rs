@@ -86,7 +86,7 @@ pub fn wrap_request(
                             }
                         }
 
-                        // 3. 处理 thoughtSignature (原有逻辑保持)
+                        // 3. 处理 thoughtSignature
                         if obj.contains_key("functionCall") && obj.get("thoughtSignature").is_none()
                         {
                             if let Some(s_id) = session_id {
@@ -95,6 +95,15 @@ pub fn wrap_request(
                                 {
                                     obj.insert("thoughtSignature".to_string(), json!(sig));
                                     tracing::debug!("[Gemini-Wrap] Injected signature (len: {}) for session: {}", sig.len(), s_id);
+                                } else {
+                                    // [FIX #2167] Session 缓存为空时对 flash 模型注入哨兵值
+                                    // Flash 模型如果不提供任何签名，Gemini API 会拒绝 functionCall
+                                    let is_flash = final_model_name.to_lowercase().contains("gemini-3-flash")
+                                        || final_model_name.to_lowercase().contains("gemini-3.1-flash");
+                                    if is_flash {
+                                        obj.insert("thoughtSignature".to_string(), json!("skip_thought_signature_validator"));
+                                        tracing::debug!("[Gemini-Wrap] [FIX #2167] Injected sentinel signature for flash model (no session cache)");
+                                    }
                                 }
                             }
                         }
@@ -386,7 +395,7 @@ pub fn wrap_request(
 
     // Inject googleSearch tool if needed
     if config.inject_google_search {
-        crate::proxy::mappers::common_utils::inject_google_search_tool(&mut inner_request);
+        crate::proxy::mappers::common_utils::inject_google_search_tool(&mut inner_request, Some(&config.final_model));
     }
 
     // Inject imageConfig if present (for image generation models)
@@ -547,7 +556,7 @@ mod test_fixes {
             }]
         });
 
-        let result = wrap_request(&body, "proj", "gemini-pro", Some(session_id), None);
+        let result = wrap_request(&body, "proj", "gemini-pro", None, Some(session_id), None);
         let injected_sig = result["request"]["contents"][0]["parts"][0]["thoughtSignature"]
             .as_str()
             .unwrap();
@@ -611,10 +620,10 @@ mod tests {
             "contents": [{"role": "user", "parts": [{"text": "Hi"}]}]
         });
 
-        let result = wrap_request(&body, "test-project", "gemini-2.5-flash", None, None);
+        let result = wrap_request(&body, "test-project", "gemini-2.5-flash", None, None, None);
         assert_eq!(result["project"], "test-project");
         assert_eq!(result["model"], "gemini-2.5-flash");
-        assert!(result["requestId"].as_str().unwrap().starts_with("agent-"));
+        assert!(result["requestId"].as_str().unwrap().starts_with("agent/"));
     }
 
     #[test]
@@ -637,7 +646,7 @@ mod tests {
             "messages": []
         });
 
-        let result = wrap_request(&body, "test-proj", "gemini-pro", None, None);
+        let result = wrap_request(&body, "test-proj", "gemini-pro", None, None, None);
 
         // 验证 systemInstruction
         let sys = result
@@ -663,7 +672,7 @@ mod tests {
         });
 
         // Test with Flash model
-        let result = wrap_request(&body, "test-proj", "gemini-2.0-flash-thinking-exp", None, None);
+        let result = wrap_request(&body, "test-proj", "gemini-2.0-flash-thinking-exp", None, None, None);
         let req = result.get("request").unwrap();
         let gen_config = req.get("generationConfig").unwrap();
         let budget = gen_config["thinkingConfig"]["thinkingBudget"]
@@ -683,7 +692,7 @@ mod tests {
                 }
             }
         });
-        let result_pro = wrap_request(&body_pro, "test-proj", "gemini-2.0-pro-exp", None, None);
+        let result_pro = wrap_request(&body_pro, "test-proj", "gemini-2.0-pro-exp", None, None, None);
         let budget_pro = result_pro["request"]["generationConfig"]["thinkingConfig"]
             ["thinkingBudget"]
             .as_u64()
@@ -707,7 +716,7 @@ mod tests {
             "contents": [{"role": "user", "parts": [{"text": "Draw a cat"}]}]
         });
 
-        let result = wrap_request(&body, "test-proj", "gemini-3-pro-image-2k", None, None);
+        let result = wrap_request(&body, "test-proj", "gemini-3-pro-image-2k", None, None, None);
         let req = result.get("request").unwrap();
         let gen_config = req.get("generationConfig").unwrap();
         
@@ -729,7 +738,7 @@ mod tests {
             }
         });
 
-        let result = wrap_request(&body, "test-proj", "gemini-pro", None, None);
+        let result = wrap_request(&body, "test-proj", "gemini-pro", None, None, None);
         let sys = result
             .get("request")
             .unwrap()
@@ -760,7 +769,7 @@ mod tests {
             }
         });
 
-        let result = wrap_request(&body, "test-proj", "gemini-pro", None, None);
+        let result = wrap_request(&body, "test-proj", "gemini-pro", None, None, None);
         let sys = result
             .get("request")
             .unwrap()
@@ -792,7 +801,7 @@ mod tests {
             "contents": [{"parts": parts}]
         });
 
-        let result = wrap_request(&body, "test-proj", "gemini-3-pro-image", None, None);
+        let result = wrap_request(&body, "test-proj", "gemini-3-pro-image", None, None, None);
 
         let request = result.get("request").unwrap();
         let contents = request.get("contents").unwrap().as_array().unwrap();
@@ -827,7 +836,7 @@ mod tests {
         });
 
         // Test with Pro model
-        let result = wrap_request(&body, "test-proj", "gemini-3-pro-preview", None, None);
+        let result = wrap_request(&body, "test-proj", "gemini-3-pro-preview", None, None, None);
         let req = result.get("request").unwrap();
         let gen_config = req.get("generationConfig").unwrap();
 
@@ -870,7 +879,7 @@ mod tests {
                 "messages": [{"role": "user", "content": "hi"}]
             });
 
-            let result = wrap_request(&body, "proj", "claude-3-7-sonnet-thinking", None, None);
+            let result = wrap_request(&body, "proj", "claude-3-7-sonnet-thinking", None, None, None);
             let req = result.get("request").unwrap();
 
             // 1. 确保根目录没有 thinking
@@ -893,7 +902,7 @@ mod tests {
                 "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
             });
 
-            let result = wrap_request(&body, "proj", "gemini-2.0-flash-thinking-exp", None, None);
+            let result = wrap_request(&body, "proj", "gemini-2.0-flash-thinking-exp", None, None, None);
             let req = result.get("request").unwrap();
             let gen_config = req.get("generationConfig").unwrap();
             let thinking_config = gen_config.get("thinkingConfig").unwrap();
@@ -902,7 +911,6 @@ mod tests {
             assert_eq!(budget, 24576, "Gemini default thinking budget should be 24576");
         }
     }
-}
 
     #[test]
     fn test_gemini_pro_auto_inject_thinking() {
@@ -923,7 +931,7 @@ mod tests {
         });
 
         // Test with Pro-preview model (should NOT auto-inject to avoid 400)
-        let result = wrap_request(&body, "test-proj", "gemini-3-pro-preview", None, None);
+        let result = wrap_request(&body, "test-proj", "gemini-3-pro-preview", None, None, None);
         let req = result.get("request").unwrap();
         let gen_config = req.get("generationConfig").unwrap();
 
@@ -938,7 +946,7 @@ mod tests {
             "model": "gemini-3-pro",
             "generationConfig": {}
         });
-        let result_std = wrap_request(&body_std, "test-proj", "gemini-3-pro", None, None);
+        let result_std = wrap_request(&body_std, "test-proj", "gemini-3-pro", None, None, None);
         let gen_config_std = result_std.get("request").unwrap().get("generationConfig").unwrap();
         
         assert!(
@@ -957,7 +965,7 @@ mod tests {
             "prompt": "Test"
         });
 
-        let result_1 = wrap_request(&body_1, "test-proj", "gemini-3-pro-image", None, None);
+        let result_1 = wrap_request(&body_1, "test-proj", "gemini-3-pro-image", None, None, None);
         let req_1 = result_1.get("request").unwrap();
         let gen_config_1 = req_1.get("generationConfig").unwrap();
         let image_config_1 = gen_config_1.get("imageConfig").unwrap();
@@ -973,7 +981,7 @@ mod tests {
              "prompt": "Test"
         });
 
-        let result_2 = wrap_request(&body_2, "test-proj", "gemini-3-pro-image", None, None);
+        let result_2 = wrap_request(&body_2, "test-proj", "gemini-3-pro-image", None, None, None);
         let req_2 = result_2.get("request").unwrap();
         let image_config_2 = req_2["generationConfig"]["imageConfig"]
             .as_object()
@@ -982,3 +990,36 @@ mod tests {
         assert_eq!(image_config_2["aspectRatio"], "1:1");
         assert_eq!(image_config_2["imageSize"], "1K");
     }
+
+    #[test]
+    fn test_mixed_tools_injection_gemini_native() {
+        // 验证 Gemini Native 协议在 Gemini 2.0+ 下支持混合工具
+        let body = json!({
+            "contents": [{"parts": [{"text": "Hello"}]}],
+            "tools": [{"functionDeclarations": [{"name": "get_weather", "parameters": {"type": "OBJECT", "properties": {"location": {"type": "STRING"}}}}]}],
+            "generationConfig": {}
+        });
+
+        // 模拟 -online 触发的 RequestConfig
+        use crate::proxy::mappers::common_utils::resolve_request_config;
+        let _config = resolve_request_config("-online", "gemini-2.0-flash", &None, None, None, None, None);
+        
+        // 实际上 wrap_request 内部会根据 config.inject_google_search 调用 inject_google_search_tool
+        // 但 wrap_request 的签名不直接接受 RequestConfig，它内部逻辑如下：
+        // if config.inject_google_search { ... }
+        
+        // 我们改为直接测试涉及的 wrap_request 逻辑片段。
+        // 由于测试 wrap_request 比较复杂（涉及外部 config），
+        // 我们可以直接验证 inject_google_search_tool 在 native 格式下的表现。
+        
+        let mut inner_request = body.clone();
+        crate::proxy::mappers::common_utils::inject_google_search_tool(&mut inner_request, Some("gemini-2.0-flash"));
+        
+        let tools = inner_request["tools"].as_array().expect("Should have tools");
+        let has_functions = tools.iter().any(|t| t.get("functionDeclarations").is_some());
+        let has_google_search = tools.iter().any(|t| t.get("googleSearch").is_some());
+        
+        assert!(has_functions, "Should contain functionDeclarations");
+        assert!(has_google_search, "Should contain googleSearch (Gemini 2.0+ supports mixed tools)");
+    }
+}

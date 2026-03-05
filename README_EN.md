@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.1.27)
+> Professional AI Account Management & Protocol Proxy System (v4.1.28)
 
 <div align="center">
   <img src="public/icon.png" alt="Antigravity Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
@@ -9,7 +9,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.1.27-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.1.28-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
@@ -122,7 +122,7 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.1.27/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/v4.1.28/install.sh | bash
 ```
 
 **Windows (PowerShell):**
@@ -132,7 +132,7 @@ irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.1.27`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL ... | bash -s -- --version 4.1.28`，dry-run mode `curl -fsSL ... | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
@@ -283,6 +283,32 @@ print(response.choices[0].message.content)
 ## 📝 Developer & Community
 
 *   **Changelog**:
+    *   **v4.1.28 (2026-03-03)**:
+        -   **[IMPORTANT WARNING] Google Risk Control & Third-Party Tool Risks**:
+            -   Due to tightened Google risk control, third-party tools may be suspended for violating Terms of Service when used with Antigravity, Gemini CLI, or Gemini Code Assist.
+            -   Accessing Antigravity, Gemini CLI, or Gemini Code Assist using third-party software, tools, or services (e.g., using OpenClaw and Antigravity OAuth) violates applicable terms and policies. Such actions may lead to account suspension or termination.
+            -   **Appeal Link**: If you believe your account was suspended by mistake, please submit an appeal via [this link](https://forms.gle/hGzM9MEUv2azZsrb9).
+            -   **Future Plan & Roadmaps**:
+                -   New versions will be pushed in the future (potentially separating account switching and proxy features into independent modules).
+                -   However, due to work commitments, there may be delays. We appreciate your understanding.
+                -   Stay tuned to our WeChat Official Account **Ctrler** or Telegram channel [AntigravityManager](https://t.me/AntigravityManager).
+            -   **Please use this project with caution.**
+        -   **[Core Fix] Normalized Rate Limit Locking Across All Model Series (Fix Issue #2209)**:
+            -   **Unified Normalization**: Fixed an issue where Claude and Gemini models' 429 (Too Many Requests) errors failed to trigger proper locking due to non-normalized limit keys.
+            -   **Enhanced Circuit Breaker Integration**: Ensured the built-in circuit breaker accurately intercepts exhausted accounts using normalized model IDs (e.g., `claude`, `gemini-3-flash`), eliminating redundant 90s wait times even when "Quota Protection" is disabled.
+        -   **[Core Fix] Resolve 400 Errors from Erroneous thinkingLevel Injection in Gemini Adaptive Mode (Fix Issue #2208)**:
+            -   **Root Cause**: Adaptive recognition logic in 4.1.27 misidentified Gemini models (e.g., `gemini-3.1-pro-high`) as supporting `thinkingLevel`, which is exclusive to Vertex AI Claude. Gemini models only accept `thinkingBudget`, causing Google API to reject requests with `400 INVALID_ARGUMENT`.
+            -   **Narrowed Triggers**: Corrected the `thinkingLevel` injection trigger from `contains("gemini-3")` to `contains("claude")`, ensuring it only applies to Claude protocols. Gemini models now correctly fallback to a safe `thinkingBudget: 24576` in adaptive mode.
+        -   **[Core Fix] Resolve Claude Code 4.1.27+ Web Search (Internal Tool) Failure (Issue #2224)**:
+            -   **Hybrid Tool Support**: Overcame Gemini v1internal API limitations regarding concurrent use of `googleSearch` and custom `functionDeclarations`.
+            -   **Intelligent Perception Injection**: Refactored the tool injection engine to automatically enable both built-in search and developer tools on Gemini 2.0+ and 3.0 models.
+            -   **Across-Protocol Alignment**: Applied the fix across OpenAI and Gemini Native protocols to ensure consistent search capabilities for high-performance models.
+        -   **[Core Fix] Resolve 400 Errors from Missing thought_signature in gemini-3-flash Function Calls (Fix Issue #2167)**:
+            -   **Root Cause**: Model recognition failed to include `gemini-3-flash` in the "thinking model" category, leading to missing `thoughtSignature` in initial function calls (no session cache) and causing `400 INVALID_ARGUMENT`.
+            -   **Protocol Fixes**: Added `is_gemini_flash_thinking` logic across OpenAI, Claude, and Gemini Native mappers to automatically inject the `skip_thought_signature_validator` sentinel when the session cache is empty.
+        -   **[Core Fix] Token Statistics Timezone Fix (Fix Issue #2214)**:
+            -   **Automatic Timezone Alignment**: Switched the base time for Token statistics from UTC to system Local Time.
+            -   **Global Multi-timezone Support**: Introduced SQLite `'localtime'` conversion mechanism. Regardless of the user's location, the timeline on statistics charts will automatically align with their system clock, completely resolving data misalignment issues for Beijing Time or other non-UTC timezones.
     *   **v4.1.27 (2026-03-01)**:
         -   **[Core Fix] Proxy Config Initialization & Tool Image Preservation (Issue #2156)**:
             -   **Default Initialization**: Fixed compilation errors caused by missing `global_system_prompt`, `proxy_pool`, and `image_thinking_mode` fields in `ProxyConfig`'s default initialization.
